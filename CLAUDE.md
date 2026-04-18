@@ -44,8 +44,9 @@ Every report contains: key metrics from the filing(s), consensus estimates, rece
 - **Financial data API** — consensus estimates.
 - **Web search API** — recent material news.
 
-API keys live in environment variables and must never be committed. The repo contains a `.gitignore/` directory with an `api_keys.txt` reminder file listing the APIs to wire up; treat this as a TODO list, not as an actual git ignore rule. A real `.gitignore` file should be added before committing any secret.
+API keys live in environment variables and must never be committed. 
 
 ## Rules
 
 - In every Python file, precede each logical block (imports, function, class, loop, branch, etc.) with a `#` comment explaining what it does.
+- Comments are designed for explanation to user with only basic knowledge of Python and no knowledge of Yoda
