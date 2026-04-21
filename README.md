@@ -1,10 +1,15 @@
 ## Project Overview
 
-Yoda is a GenAI-powered pre-earnings research assistant for financial analysts. Given a ticker symbol, it fetches SEC filings from EDGAR, runs RAG over the filing text, pulls consensus estimates and recent news via external APIs, and generates a structured research dossier.
+Yoda is a GenAI-powered pre-earnings research assistant for financial analysts. Given a ticker symbol, it fetches SEC filings from EDGAR, runs RAG over the filing text, pulls consensus estimates and recent news via external APIs, and generates a structured research dossier downloadable as PDF.
 
-Two modes share the same ingestion and presentation layers but differ in retrieval behavior:
-- **RAG-LLM mode** — fixed pipeline, 4–5 predefined retrieval queries, single LLM generation call, fast throughput.
-- **Agent-Reasoning mode** — ReAct-style agent loop that observes retrieval results, identifies gaps, issues follow-up tool calls, and iterates until all report sections are covered. Has a hard iteration cap.
+## Two Modes
+
+Both modes share the same ingestion and presentation layers; they differ in retrieval behavior.
+
+- **RAG-LLM mode** (`rag_mode.py`) — fixed pipeline. Runs 5 predefined retrieval queries (revenue segments, forward guidance, risk factors, capex/margins, changes from prior filing), pulls consensus estimates and news via external tools, and generates the report in a single structured LLM call. Fast and consistent; intended for wide ticker coverage.
+
+- **Agent-Reasoning mode** (`agent_mode.py`) — ReAct loop. Starts with the same initial retrieval, then iterates: observe → identify gaps → call tools (extra retrieval, news lookup, related-company lookup) → observe → repeat. Terminates when all report sections have sufficient context or a hard iteration cap is hit. The full reasoning trace is streamed to the UI for auditability.
+
 
 ## Key Commands
 
@@ -38,12 +43,14 @@ pip install -r requirements.txt
 - Full reasoning trace is logged and streamed to the UI for auditability.
 
 ### Output
-Both modes produce a structured report with: key metrics from filing(s), consensus estimates, recent material news, bull/bear cases, and "what to watch for." Every claim includes a source citation (filing section + page, or API + timestamp). Report is downloadable as PDF.
+Both modes produce a structured report with: key metrics from filing(s), consensus estimates, recent material news, bull/bear cases, and "what to watch for." Every claim includes a source citation (filing section + page, or API + timestamp). Final PDFs are written to `reports/`.
 
 ### APIs and Keys
-API keys are stored as environment variables and excluded from the repo via `.gitignore`. The two external tool integrations are:
-- **Financial data API** — consensus estimates (key: to be added to env)
-- **Web search API** — recent news (key: to be added to env)
+API keys are stored as environment variables and excluded from the repo via `.gitignore`.
+
+### External tools (called from both modes)
+- **Financial data API** — consensus estimates.
+- **Web search API** — recent material news.
 
 ### `reports/`
 Directory where generated PDF dossiers are saved.
