@@ -244,7 +244,7 @@ def _write_disk_cache(ticker: str, meta: dict, raw_html: str) -> None:
 # Public API
 # ---------------------------------------------------------------------------
 
-def fetch_latest_filing(ticker: str) -> dict:
+def fetch_latest_filing(ticker: str, force_refresh: bool = False) -> dict:
     """Fetch the most recent 10-Q (or 10-K fallback) for the given ticker.
 
     Returns a dict with keys:
@@ -253,14 +253,20 @@ def fetch_latest_filing(ticker: str) -> dict:
 
     Both the raw HTML and filing metadata are cached to disk so a second call
     for the same ticker skips all HTTP calls and returns from disk.
+
+    Pass force_refresh=True to bypass the disk cache and re-fetch from SEC.
+    Use this when a new filing may have been published since the last cache
+    write. The new filing overwrites the cached one on disk.
     """
     ticker = ticker.upper().strip()
 
     # Check disk cache first — if we have everything on disk, skip all HTTP.
-    cached = _read_disk_cache(ticker)
-    if cached:
-        cached["clean_text"] = _clean_html(cached["raw_html"])
-        return cached
+    # force_refresh=True bypasses the cache so callers can pick up new filings.
+    if not force_refresh:
+        cached = _read_disk_cache(ticker)
+        if cached:
+            cached["clean_text"] = _clean_html(cached["raw_html"])
+            return cached
 
     # Step 1: resolve ticker to CIK using the SEC's public mapping file.
     cik_map = _load_ticker_cik_map()
