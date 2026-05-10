@@ -1,1 +1,8 @@
-API_keys.txt
+.env
+data/filings/
+data/chroma/
+__pycache__/
+*.pyc
+.venv/
+venv/
+.DS_Store

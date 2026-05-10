@@ -1,1 +1,36 @@
+# Pinned dependencies for Yoda. Embedding library is deferred to Phase 2;
+# PDF library (weasyprint vs reportlab) is deferred to Phase 7.
 
+# Streamlit UI
+streamlit==1.40.0
+
+# SEC EDGAR ingestion
+sec-edgar-downloader==5.0.3
+requests==2.32.3
+
+# HTML parsing
+beautifulsoup4==4.12.3
+lxml==5.3.0
+
+# Vector store
+# Pinned to 1.5.9 (not 0.5.x) because chromadb 0.5.x requires chroma-hnswlib
+# which must be compiled from source and needs MSVC Build Tools on Windows.
+# chromadb 1.x ships a pre-built Windows wheel; PersistentClient API is the same.
+chromadb==1.5.9
+
+# LLM clients
+openai==1.54.0
+anthropic==0.39.0
+
+# Schema validation
+pydantic==2.9.2
+
+# Financial data
+yfinance==0.2.50
+finnhub-python==2.4.21
+
+# News / web search
+tavily-python==0.5.0
+
+# Env loading
+python-dotenv==1.0.1
