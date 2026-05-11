@@ -20,6 +20,8 @@ chromadb==1.5.9
 
 # LLM clients
 openai==1.54.0
+# httpx 0.28 dropped the `proxies` arg that openai 1.54.0 uses internally.
+httpx<0.28
 anthropic==0.39.0
 
 # Schema validation
