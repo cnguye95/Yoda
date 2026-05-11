@@ -661,8 +661,26 @@ Rules you must follow without exception:
    tagged "[Financial Statements — Consolidated Statements of
    Operations]", use exactly "Financial Statements — Consolidated
    Statements of Operations"). Do NOT rephrase, abbreviate, or
-   reconstruct citation labels. For news-derived facts, cite the
-   article URL exactly as given.
+   reconstruct citation labels. If the chunk heading after the dash
+   looks like a fragment (starts with a lowercase letter, is a
+   sentence remnant, or is missing the leading character of a word —
+   e.g. "inancial instruments." or "r working capital balances."),
+   use ONLY the section label before the dash (e.g. "MD&A" or
+   "Financial Statements") as the source_citation. Never propagate a
+   corrupted heading. For news-derived facts, cite the article URL
+   exactly as given.
+
+   The metric `name` field MUST be the LITERAL line-item label from
+   the filing chunks — copy the exact wording the filing uses. If
+   the chunk shows a row labeled "Cash and cash equivalents", use
+   exactly "Cash and cash equivalents" (not "Total Cash"). If the
+   chunk shows "Streaming content obligations, due after one year",
+   use that wording (not "Long-Term Debt"). Do NOT relabel a filing
+   line item into a category name you think fits — the analyst needs
+   to see what the filing actually reports. Do NOT mix sub-lines
+   with totals: a line item labeled "Cash and cash equivalents, end
+   of period" or the bolded total row of a section is the figure to
+   extract, not a single component of a sum.
 
    key_metrics and revenue_segments figures MUST come from the
    FILING CHUNKS provided in the user message, NOT from hypotheses
@@ -692,6 +710,16 @@ Rules you must follow without exception:
 
 2. recent_news items MUST carry the exact url field from the news pool you
    are given. Do NOT synthesize URLs. Do NOT shorten URLs. Do NOT omit URLs.
+
+   forward_guidance.text MUST be a VERBATIM quote from the FILING
+   CHUNKS — wrap it in double quotes to make this explicit. Pull from
+   the MD&A outlook, "subsequent events," or any management commentary
+   subsection in the chunks. Do NOT synthesize a guidance sentence
+   from external news, analyst projections, or your own inference.
+   If no outlook/guidance language exists in the chunks, set
+   forward_guidance.text to "No forward guidance issued in this
+   filing." and add an entry to data_gaps stating which guidance
+   topics the filing did not address.
 
 3. what_to_watch is the PRIMARY output of this report. Produce at least 5
    entries. Each entry is a WatchItem object with two fields: `text` and

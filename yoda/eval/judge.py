@@ -119,24 +119,6 @@ def judge_report(report: EarningsReport, filing_text: str) -> JudgeScores:
         "input_schema": JudgeScores.model_json_schema(),
     }
 
-    # Call the Anthropic API with tool_choice set to force the tool call.
-    response = _client.messages.create(
-        model=_JUDGE_MODEL,
-        max_tokens=1024,
-        system=_SYSTEM_PROMPT,
-        tools=[tool_def],
-        tool_choice={"type": "tool", "name": "submit_rubric_scores"},
-        messages=[{"role": "user", "content": user_message}],
-    )
-
-    # Verify we hit the intended model — catches wrong-key misconfiguration.
-    assert response.model == _JUDGE_MODEL, (
-        f"Model mismatch: expected {_JUDGE_MODEL}, got {response.model}"
-    )
-
-    # Extract the tool call input dict from the first content block.
-    scores_dict = response.content[0].input
-
     # The model occasionally returns DimensionScore fields as JSON strings
     # rather than nested dicts. Only attempt parse on strings that look like
     # JSON objects (start with '{') to leave plain strings like overall_comment
@@ -149,11 +131,34 @@ def judge_report(report: EarningsReport, filing_text: str) -> JudgeScores:
                 pass
         return v
 
-    coerced = {k: _try_parse(v) for k, v in scores_dict.items()}
-    # The model also occasionally wraps overall_comment in a one-key dict.
-    if isinstance(coerced.get("overall_comment"), dict):
-        coerced["overall_comment"] = coerced["overall_comment"].get("overall_comment", "")
-    scores = JudgeScores.model_validate(coerced)
+    # Retry once on validation failure (e.g. dropped field, truncated output).
+    last_err = None
+    for attempt in range(2):
+        response = _client.messages.create(
+            model=_JUDGE_MODEL,
+            max_tokens=2048,
+            system=_SYSTEM_PROMPT,
+            tools=[tool_def],
+            tool_choice={"type": "tool", "name": "submit_rubric_scores"},
+            messages=[{"role": "user", "content": user_message}],
+        )
+        assert response.model == _JUDGE_MODEL, (
+            f"Model mismatch: expected {_JUDGE_MODEL}, got {response.model}"
+        )
+
+        scores_dict = response.content[0].input
+        coerced = {k: _try_parse(v) for k, v in scores_dict.items()}
+        if isinstance(coerced.get("overall_comment"), dict):
+            coerced["overall_comment"] = coerced["overall_comment"].get("overall_comment", "")
+
+        try:
+            scores = JudgeScores.model_validate(coerced)
+            break
+        except Exception as exc:
+            last_err = exc
+            print(f"  [judge] attempt {attempt + 1} validation failed: {exc}; retrying...")
+    else:
+        raise last_err
 
     # Persist to cache before returning.
     _CACHE_DIR.mkdir(parents=True, exist_ok=True)

@@ -1,7 +1,7 @@
 ticker,mode,latency_seconds,cost_usd,extraction_completeness,accuracy,source_traceability,relevance,usefulness
-NFLX,baseline,9.67,0.0,1,2,1,2,1
-NFLX,panel_deep,89.03,0.08798,3,2,2,3,2
-COIN,baseline,8.55,0.0,3,3,2,3,2
-COIN,panel_deep,74.96,0.07534,3,3,2,3,3
-PANW,baseline,8.29,0.0,1,2,1,2,1
-PANW,panel_deep,124.05,0.09182,3,3,2,3,3
+NFLX,baseline,11.43,0.0,1,2,2,2,1
+NFLX,panel_deep,98.0,0.08455,3,2,2,3,2
+COIN,baseline,10.39,0.0,3,3,2,3,2
+COIN,panel_deep,84.38,0.07922,3,4,2,3,3
+PANW,baseline,7.09,0.0,1,1,1,2,1
+PANW,panel_deep,96.57,0.09517,4,3,2,4,4
