@@ -16,8 +16,14 @@ import time
 import pathlib
 from datetime import date, timedelta
 
+import warnings
+
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
+
+# SEC filings are XHTML/XML but lxml's HTML parser handles them correctly.
+# Suppress the warning so it doesn't surface in the Streamlit log.
+warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
 from yoda import config
 

@@ -9,6 +9,7 @@ Two public functions:
 """
 
 import sys
+import time
 from datetime import datetime, timezone, date, timedelta
 
 import finnhub
@@ -104,7 +105,16 @@ def _consensus_yfinance_backup(ticker: str) -> dict:
         "analyst_count":      None,
     }
     try:
-        cal = yf.Ticker(ticker).calendar
+        # Yahoo Finance rate-limits aggressively on the first request; one
+        # retry after a short sleep resolves transient 429s reliably.
+        cal = None
+        for attempt in range(2):
+            try:
+                cal = yf.Ticker(ticker).calendar
+                break
+            except Exception:
+                if attempt == 0:
+                    time.sleep(3)
         if not cal:
             return result
 
