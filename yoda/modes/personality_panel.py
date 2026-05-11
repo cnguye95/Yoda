@@ -59,7 +59,6 @@ from yoda.schema import (
     CritiqueMessage,
     PersonalityResult,
 )
-from yoda.tools.consensus import get_consensus
 
 
 # ---------------------------------------------------------------------------
@@ -681,7 +680,7 @@ Rules you must follow without exception:
      - Begin with a bold topic heading followed by a colon, formatted with
        markdown asterisks, e.g. "**Capital Return Programs:** ..."
      - Present the evidence-backed analyst view. Cite concrete figures,
-       quotes, or facts drawn from the hypotheses, news, or consensus data.
+       quotes, or facts drawn from the hypotheses and news.
      - When the panel investigation surfaced disagreement, synthesize BOTH
        sides as a normal sell-side analyst would: present the supporting
        evidence, then introduce the counter-evidence with a contrastive
@@ -729,9 +728,9 @@ Rules you must follow without exception:
 4. hypotheses_explored MUST echo the FINAL list of hypotheses (included +
    contested, NOT dropped). The orchestrator will validate this.
 
-5. If a fact is not supported by hypothesis evidence, news, or consensus data,
+5. If a fact is not supported by hypothesis evidence or news,
    put it in data_gaps rather than inventing it.
-   data_gaps is ONLY for facts the filing/news/consensus pool SHOULD have
+   data_gaps is ONLY for facts the filing/news pool SHOULD have
    covered but did not (e.g., a segment revenue figure missing from MD&A,
    a guidance number the company has historically given but omitted this
    quarter). Do NOT list forward-looking or inherently-external items as
@@ -755,7 +754,6 @@ def _synthesize_report(
     final_hypotheses: list[Hypothesis],
     contested: list[Hypothesis],
     critique_messages: list[CritiqueMessage],
-    consensus_data: dict,
     news_pool: list[dict],
 ) -> tuple[EarningsReport, int, int]:
     """One gpt-4o call producing the final EarningsReport.
@@ -793,7 +791,6 @@ def _synthesize_report(
         f"--- HYPOTHESES (final, from panel investigation) ---\n{hyp_text}\n\n"
         f"--- {contested_block} ---\n\n"
         f"--- CRITIQUE MESSAGES (peer review) ---\n{msg_text}\n\n"
-        f"--- CONSENSUS DATA (JSON) ---\n{json.dumps(consensus_data, default=str)}\n\n"
         f"--- NEWS POOL (JSON, URLs preserved) ---\n{json.dumps(news_pool, default=str)}\n\n"
         f"Produce the EarningsReport. Echo final_hypotheses in hypotheses_explored."
     )
@@ -1028,8 +1025,6 @@ def run_personality_panel(
     # Phase 4 — Synthesis
     # ------------------------------------------------------------------
     print(f"{log_prefix} Phase 4: synthesizing report via {GPT4O_MODEL}...")
-    consensus_data = get_consensus(ticker)
-
     t0 = time.perf_counter()
     report, syn_in, syn_out = _synthesize_report(
         ticker=ticker,
@@ -1037,7 +1032,6 @@ def run_personality_panel(
         final_hypotheses=final_hypotheses,
         contested=contested,
         critique_messages=critique_messages,
-        consensus_data=consensus_data,
         news_pool=ctx.news_pool,
     )
     gpt4o_in  += syn_in

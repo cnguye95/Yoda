@@ -29,7 +29,6 @@ from yoda.modes.rag_llm import RETRIEVAL_QUERIES, TOP_K, _chunk_heading
 from yoda.retrieval.embeddings import embed_texts
 from yoda.retrieval.vector_store import ChromaStore
 from yoda.schema import EarningsReport
-from yoda.tools.consensus import get_consensus
 from yoda.tools.news import search_news
 
 
@@ -252,17 +251,13 @@ def run_agent(ticker: str, max_iterations: int = 8) -> tuple[EarningsReport, Rea
     ))
     print(f"[agent] init retrieval: {init_obs}")
 
-    # Fetch consensus and news; log as a single synthetic trace step.
+    # Fetch recent news; log as a synthetic trace step.
     t0 = time.perf_counter()
-    consensus_data = get_consensus(ticker)
     news_results   = search_news(f"{ticker} earnings", max_results=5)
     all_news.extend(news_results)
     tools_elapsed = time.perf_counter() - t0
 
-    tools_obs = (
-        f"consensus source={consensus_data['source']}; "
-        f"{len(news_results)} news items fetched."
-    )
+    tools_obs = f"{len(news_results)} news items fetched."
     trace_steps.append(TraceStep(
         iteration=0,
         thought="Initial tool calls (no LLM decision).",
@@ -430,7 +425,6 @@ def run_agent(ticker: str, max_iterations: int = 8) -> tuple[EarningsReport, Rea
         f"Ticker: {ticker}\n"
         f"Report timestamp (use for report_generated_at): {now_utc}\n\n"
         f"--- RETRIEVED FILING CHUNKS ---\n{chunks_section}\n\n"
-        f"--- CONSENSUS DATA (JSON) ---\n{json.dumps(consensus_data, default=str)}\n\n"
         f"--- RECENT NEWS (JSON) ---\n{json.dumps(all_news, default=str)}\n\n"
         "Produce the structured EarningsReport now."
     )

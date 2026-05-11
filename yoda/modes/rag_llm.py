@@ -25,7 +25,6 @@ from yoda.modes.baseline import _validate_citations
 from yoda.retrieval.embeddings import embed_texts
 from yoda.retrieval.vector_store import ChromaStore
 from yoda.schema import EarningsReport
-from yoda.tools.consensus import get_consensus
 from yoda.tools.news import search_news
 
 
@@ -183,12 +182,8 @@ def run_rag_llm(ticker: str) -> EarningsReport:
     print(f"[rag_llm] Unique chunks after deduplication: {len(unique_chunks)}")
 
     # ------------------------------------------------------------------
-    # Step 4: Fetch consensus estimates and recent news
+    # Step 4: Fetch recent news
     # ------------------------------------------------------------------
-    t0 = time.perf_counter()
-    consensus_data = get_consensus(ticker)
-    print(f"[rag_llm] get_consensus -> {time.perf_counter() - t0:.2f}s")
-
     t0 = time.perf_counter()
     news_results = search_news(f"{ticker} earnings", max_results=5)
     print(f"[rag_llm] search_news -> {time.perf_counter() - t0:.2f}s")
@@ -209,7 +204,6 @@ def run_rag_llm(ticker: str) -> EarningsReport:
         f"Ticker: {ticker}\n"
         f"Report timestamp (use for report_generated_at): {now_utc}\n\n"
         f"--- RETRIEVED FILING CHUNKS ---\n{chunks_section}\n\n"
-        f"--- CONSENSUS DATA (JSON) ---\n{json.dumps(consensus_data, default=str)}\n\n"
         f"--- RECENT NEWS (JSON) ---\n{json.dumps(news_results, default=str)}\n\n"
         "Produce the structured EarningsReport now."
     )

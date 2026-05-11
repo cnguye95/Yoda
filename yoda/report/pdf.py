@@ -2,7 +2,7 @@
 
 report_to_pdf() renders a structured EarningsReport to a downloadable PDF with
 all sections styled for readability: cover, metrics/segments/guidance/risks tables,
-news list, consensus block, bull/bear/watch bullets, and data gaps.
+news list, bull/bear/watch bullets, and data gaps.
 
 Uses reportlab (pure Python, no native deps on Windows). Every source_citation
 optionally hyperlinks to the filing URL if provided.
@@ -252,39 +252,6 @@ def _risks_section(report: EarningsReport, styles, filing_url: str | None = None
     return elements
 
 
-def _consensus_table(report: EarningsReport, styles):
-    """Build the Analyst Consensus table."""
-    elements = []
-    elements.append(Paragraph("Analyst Consensus", styles['SectionHeader']))
-
-    eps = f"{report.consensus.eps_estimate:.2f}" if report.consensus.eps_estimate else "—"
-    revenue = f"{report.consensus.revenue_estimate:.0f}" if report.consensus.revenue_estimate else "—"
-    date = report.consensus.next_earnings_date or "—"
-
-    rows = [
-        ['EPS Estimate', 'Revenue Estimate', 'Next Earnings Date', 'Source'],
-        [eps, revenue, date, report.consensus.source or "—"],
-    ]
-
-    table = Table(rows, colWidths=[1.5*inch, 1.5*inch, 1.5*inch, 1.5*inch])
-    table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#003366')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 10),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-        ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#f5f5f5')),
-        ('GRID', (0, 0), (-1, -1), 1, colors.black),
-        ('FONTSIZE', (0, 1), (-1, -1), 9),
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-    ]))
-
-    elements.append(table)
-    elements.append(Spacer(1, 0.3*inch))
-    return elements
-
-
 def _news_section(report: EarningsReport, styles):
     """Build the Recent News list with hyperlinks."""
     elements = []
@@ -434,9 +401,6 @@ def report_to_pdf(report: EarningsReport, output_path: str, filing_url: str | No
 
     # Key risks
     story.extend(_risks_section(report, styles, filing_url))
-
-    # Analyst consensus
-    story.extend(_consensus_table(report, styles))
 
     # Recent news
     story.extend(_news_section(report, styles))

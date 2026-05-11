@@ -16,7 +16,6 @@ from openai import OpenAI
 
 from yoda import config
 from yoda.schema import EarningsReport
-from yoda.tools.consensus import get_consensus
 from yoda.tools.news import search_news
 
 
@@ -109,9 +108,6 @@ def run_baseline(ticker: str, manual_excerpt: str) -> EarningsReport:
     ticker = ticker.upper().strip()
     now_utc = datetime.now(timezone.utc).isoformat()
 
-    # Fetch analyst consensus estimates and basic market data.
-    consensus_data = get_consensus(ticker)
-
     # Fetch recent news relevant to the ticker's upcoming earnings.
     news_results = search_news(f"{ticker} earnings", max_results=5)
 
@@ -120,7 +116,6 @@ def run_baseline(ticker: str, manual_excerpt: str) -> EarningsReport:
         f"Ticker: {ticker}\n"
         f"Report timestamp (use for report_generated_at): {now_utc}\n\n"
         f"--- FILING EXCERPT ---\n{manual_excerpt}\n\n"
-        f"--- CONSENSUS DATA (JSON) ---\n{json.dumps(consensus_data, default=str)}\n\n"
         f"--- RECENT NEWS (JSON) ---\n{json.dumps(news_results, default=str)}\n\n"
         "Produce the structured EarningsReport now."
     )

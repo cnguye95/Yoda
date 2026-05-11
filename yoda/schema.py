@@ -58,15 +58,6 @@ class NewsItem(BaseModel):
     relevance_note: str    # one sentence on why this matters for earnings
 
 
-class ConsensusBlock(BaseModel):
-    # Analyst consensus estimates, populated from Phase 3 get_consensus().
-    # Fields are nullable because Finnhub free tier may not cover all tickers.
-    eps_estimate: float | None
-    revenue_estimate: float | None
-    next_earnings_date: str | None
-    source: str            # "finnhub" | "fmp_backup" | "finnhub_empty"
-
-
 class WatchItem(BaseModel):
     # One pre-earnings watchlist entry. text holds the existing two-part
     # format: "**Heading:** analysis paragraph\n\n-> Monitor ...".
@@ -132,9 +123,8 @@ class EarningsReport(BaseModel):
     forward_guidance: ForwardGuidance
     key_risks:        list[Risk]
 
-    # External data — news from Tavily, consensus from Finnhub
+    # External data — news from Tavily
     recent_news: list[NewsItem]
-    consensus:   ConsensusBlock
 
     # Synthesis — LLM-generated, no citation required for these lists
     bull_case:    list[str]
@@ -186,10 +176,6 @@ if __name__ == "__main__":
             NewsItem(headline="Netflix Q1 beat", date="2026-04-18",
                      url="https://example.com/article", relevance_note="setup for next call"),
         ],
-        consensus=ConsensusBlock(
-            eps_estimate=4.5, revenue_estimate=12_000_000_000.0,
-            next_earnings_date="2026-07-18", source="finnhub",
-        ),
         bull_case=["Ad-tier ARPU rising"],
         bear_case=["Content cost pressure"],
         what_to_watch=[
