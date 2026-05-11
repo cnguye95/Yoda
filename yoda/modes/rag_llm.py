@@ -89,13 +89,32 @@ _client = OpenAI(api_key=config.OPENAI_API_KEY)
 # ---------------------------------------------------------------------------
 
 def _chunk_heading(chunk) -> str:
-    # Extract the first short non-empty line from the chunk text to use as a
-    # human-readable heading in citations (e.g. "Revenue Recognition").
-    # Falls back to the section label if no line is short enough.
+    # Extract the first line that looks like a heading from the chunk text.
+    # A heading is short (<=80 chars), starts with an uppercase letter or
+    # digit, and does not look like a wrapped sentence tail. This avoids
+    # garbage like "inancial instruments" or "r working capital balances"
+    # that originate from mid-word splits across chunk boundaries (the
+    # chunker uses a 1500-char window with 200-char overlap).
     for line in chunk.text.splitlines():
         stripped = line.strip()
-        if stripped and len(stripped) <= 80:
-            return stripped
+        # Skip empty or too-long lines.
+        if not stripped or len(stripped) > 80:
+            continue
+        # Reject lines that don't start with a capital or digit -- typical
+        # heading-vs-prose tell.
+        if not (stripped[0].isupper() or stripped[0].isdigit()):
+            continue
+        # Reject lines that look like a wrapped sentence tail: >=3 words,
+        # no terminal punctuation, last word lowercase.
+        words = stripped.split()
+        if (
+            len(words) >= 3
+            and stripped[-1] not in ".:!?)]"
+            and words[-1].islower()
+        ):
+            continue
+        return stripped
+    # Fall back to the section label if no clean heading line is found.
     return chunk.section
 
 

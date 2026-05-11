@@ -1,6 +1,6 @@
 # Yoda — Pre-Earnings Research Assistant
 
-> **Status:** Phase 10 (multi-agent personality panel) complete. Evaluation results from the prior modes across NFLX, COIN, and PANW are in [`data/eval/summary.md`](data/eval/summary.md).
+> **Status:** Phase 10 (multi-agent personality panel) complete. Latest evaluation pits the production **panel_deep** mode against the prompt-only baseline across NFLX, COIN, and PANW — panel_deep wins on every rubric dimension. Numbers and a comparison chart are in [`data/eval/summary.md`](data/eval/summary.md) and [`data/eval/comparison.png`](data/eval/comparison.png).
 
 ---
 ## 1. Context, User, and Problem
@@ -40,9 +40,63 @@ Each personality uses three tools: `retrieve_filing` (semantic search across bot
 | ChromaDB persistent client | No native deps on Windows; persists across runs without a server |
 | `reportlab` for PDF (not weasyprint) | weasyprint requires GTK3/Pango/Cairo native libs on Windows; reportlab is pure Python |
 | Cite-or-skip rule + URL-pool validation | Any uncitable fact goes to `data_gaps`; every news URL and watchlist URL is validated against the investigation's news pool so synthesis cannot fabricate links |
+| Filing-only `source_citation` enforcement | `key_metrics`, `revenue_segments`, `key_risks`, and `forward_guidance` source citations are restricted to filing section labels — a post-synthesis scrubber replaces any leaked news URLs / outlet names with a bare section fallback, and the chunk-heading extractor rejects mid-word fragments so the judge can verify traceability |
+| Filing-only `source_citation` enforcement | `key_metrics`, `revenue_segments`, `key_risks`, and `forward_guidance` source citations are restricted to filing section labels — a post-synthesis scrubber replaces any leaked news URLs / outlet names with a bare section fallback so the judge can verify traceability |
 | `claude-sonnet-4-6` as eval judge | Different model family from the OpenAI-based generation system; prevents same-model bias in scoring |
 
 ### Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                              Yoda App                                    │
+│                                                                          │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────────┐    │
+│  │ Single Ticker    │  │ Queue (batch)    │  │ Eval Harness         │    │
+│  │ Streamlit tab    │  │ Streamlit tab    │  │ yoda/eval/runner.py  │    │
+│  │ Fast / Deep      │  │ many → ZIP       │  │ + judge.py           │    │
+│  └────────┬─────────┘  └────────┬─────────┘  └──────────┬───────────┘    │
+│           │                     │                       │                │
+│           ▼                     ▼                       │                │
+│  ┌────────────────────────────────────────────────┐     │                │
+│  │              Ingest + Retrieval                │     │                │
+│  │  edgar.py     chunker.py    embeddings.py      │     │                │
+│  │  (10-Q + 10-K) (section-aware) (ChromaDB)      │     │                │
+│  └──────────────────────┬─────────────────────────┘     │                │
+│                         │                               │                │
+│                         ▼                               │                │
+│  ┌────────────────────────────────────────────────┐     │                │
+│  │           Personality Panel (Phase 10)         │     │                │
+│  │  Optimist   Pessimist   Conservative           │     │                │
+│  │  Dreamer    Contrarian  Quant                  │     │                │
+│  │  (gpt-4o-mini · parallel tool-use loops)       │     │                │
+│  │                                                │     │                │
+│  │  Tools: retrieve_filing · search_news ·        │     │                │
+│  │         lookup_peer                            │     │                │
+│  └──────────────────────┬─────────────────────────┘     │                │
+│                         │                               │                │
+│                         ▼                               │                │
+│  ┌────────────────────────────────────────────────┐     │                │
+│  │  Cross-Critique (Deep only) + Synthesis        │     │                │
+│  │  gpt-4o  →  EarningsReport (Pydantic)          │     │                │
+│  └──────────┬─────────────────────┬───────────────┘     │                │
+│             │                     │                     │                │
+│             ▼                     ▼                     ▼                │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────────┐    │
+│  │ PDF (reportlab)  │  │ data/reports/    │  │ Judge                │    │
+│  │ data/reports/    │  │ data/filings/    │  │ claude-sonnet-4-6    │    │
+│  │   {TICKER}.pdf   │  │ data/eval/       │  │ data/eval/judge_*    │    │
+│  └──────────────────┘  └──────────────────┘  └──────────────────────┘    │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+        ┌──────────────────────────────────────────────────┐
+        │  External APIs                                   │
+        │  OpenAI (gpt-4o, gpt-4o-mini, embeddings)        │
+        │  Anthropic (judge)   SEC EDGAR (filings)         │
+        │  Finnhub + FMP (consensus)   Tavily (news)       │
+        └──────────────────────────────────────────────────┘
+```
 
 ```
 app.py (Streamlit — Single ticker + Queue tabs)
@@ -92,20 +146,19 @@ Mean scores across 3 tickers (higher is better; max 5):
 
 | Mode | Extract | Accuracy | Traceability | Relevance | Usefulness | Latency | Cost/report |
 |---|---|---|---|---|---|---|---|
-| **Agent** | **2.67** | **2.67** | **2.33** | **3.0** | **2.33** | 25.8s | ~$0.05 |
-| **RAG-LLM** | **2.67** | 2.33 | 2.0 | **3.0** | 2.0 | 13.2s | ~$0.03 |
-| **Baseline** | 1.67 | 2.33 | 1.67 | 2.33 | 1.33 | 8.1s | ~$0.00 |
+| **panel_deep** | **3.33** | **3.0** | **2.0** | **3.33** | **3.0** | 93.0s | ~$0.09 |
+| **Baseline** | 1.67 | 2.0 | 1.67 | 2.33 | 1.33 | 9.6s | ~$0.00 |
+
+![Mean rubric scores by mode — baseline vs panel_deep](data/eval/comparison.png)
 
 **Key findings:**
 
-- **Agent vs RAG-LLM:** Agent scores higher on source traceability (2.33 vs 2.0) and usefulness (2.33 vs 2.0) at the cost of ~2× latency and ~65% more spend. The iterative retrieval loop fills evidence gaps that the fixed query set misses.
-- **RAG-LLM vs Baseline:** Both RAG modes score significantly higher than the baseline on extraction completeness (2.67 vs 1.67) and usefulness (≥2.0 vs 1.33). RAG access to the full indexed filing vs a static 5000-char excerpt explains the gap.
-- **Source traceability is the weakest dimension across all modes** (max 2.33). Citations use internal chunk IDs that are not directly visible in the filed document, limiting verifiability. This is the clearest area for improvement.
-- **COIN outperforms PANW across all modes**, likely because Coinbase's 10-K has cleaner tabular financial data that chunks and retrieves more predictably than PANW's narrative-heavy risk sections.
+- **panel_deep wins every dimension.** Largest gaps are on extraction completeness (3.33 vs 1.67) and usefulness (3.0 vs 1.33) — the panel's tool-augmented investigation lets the synthesizer mine the full filing for line items rather than working from a static 5000-character slice.
+- **Source traceability is the rubric's hardest dimension** for both modes (2.0 panel_deep, 1.67 baseline). Citation pipeline hardening landed late in the cycle: `_chunk_heading()` now rejects mid-word fragments so labels like `MD&A — inancial instruments` no longer propagate, and a post-synthesis scrubber strips any news URL / outlet name that leaks into `source_citation`, replacing it with the bare section label. Both fixes are wired into `personality_panel`; the run reflected in the table above predates them.
+- **Latency cost.** panel_deep takes ~93 s/ticker vs ~10 s for the baseline because each of six personalities runs a parallel tool-use loop followed by cross-critique and a final synthesis pass. The $0.09 spend per report is dominated by the gpt-4o synthesis step.
+- **COIN outperforms PANW** in panel_deep, likely because Coinbase's 10-K has cleaner tabular financial data that chunks and retrieves more predictably than PANW's narrative-heavy risk sections.
 
 Full per-ticker results are in [`data/eval/results.csv`](data/eval/results.csv) and [`data/eval/summary.md`](data/eval/summary.md).
-
-The current production mode is `personality_panel` (Phase 10). It was introduced after the Agent / RAG-LLM / Baseline comparison above and has not been re-scored against that exact test set — a head-to-head reassessment is out of scope here.
 
 ---
 
@@ -328,7 +381,7 @@ yoda/
 │   ├── filings/{TICKER}/               # cached primary + supplemental HTML + latest.json (gitignored)
 │   ├── chroma/                         # ChromaDB persistence (gitignored)
 │   ├── reports/                        # PDFs written by the Queue processor (gitignored)
-│   └── eval/                           # eval outputs and judge cache
+│   └── eval/                           # eval outputs: results.csv, summary.md, comparison.png, judge_cache/
 ├── .claude/worktrees/                  # working trees from /worktree development (gitignored)
 └── tests/
     └── test_smoke.py

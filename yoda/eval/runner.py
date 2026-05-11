@@ -245,6 +245,62 @@ def _write_summary(df: pd.DataFrame, path) -> None:
     import pathlib
     pathlib.Path(path).write_text("\n".join(lines), encoding="utf-8")
 
+    # Emit a side-by-side bar chart for presentation slides.
+    chart_path = pathlib.Path(path).parent / "comparison.png"
+    _write_chart(df, chart_path)
+    print(f"Chart saved to {chart_path}")
+
+
+# ---------------------------------------------------------------------------
+# Comparison chart — grouped bar chart, baseline vs panel_deep across 5 metrics
+# ---------------------------------------------------------------------------
+
+# Display-name mapping for the chart legend / title. Keep the underlying
+# mode keys intact in the DataFrame / CSV / summary.md — only the chart
+# rebrands `panel_deep` as `Yoda` for slide presentation.
+_MODE_DISPLAY = {"panel_deep": "Yoda", "baseline": "Baseline"}
+
+
+def _display(mode: str) -> str:
+    return _MODE_DISPLAY.get(mode, mode)
+
+
+def _write_chart(df: pd.DataFrame, path) -> None:
+    # Grouped bar chart with one bar per mode within each metric group.
+    # Designed for slide embedding: 10x5 figure, value labels above bars.
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    metrics = [
+        "extraction_completeness", "accuracy",
+        "source_traceability", "relevance", "usefulness",
+    ]
+    mode_means = df.groupby("mode")[metrics].mean()
+
+    # X positions for the metric groups; one bar offset per mode.
+    x = np.arange(len(metrics))
+    n_modes = len(mode_means.index)
+    width = 0.8 / max(n_modes, 1)
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    # Render one bar series per mode, offset so they sit side-by-side.
+    for i, mode in enumerate(mode_means.index):
+        offset = (i - (n_modes - 1) / 2) * width
+        bars = ax.bar(x + offset, mode_means.loc[mode], width, label=_display(mode))
+        ax.bar_label(bars, fmt="%.2f", padding=3, fontsize=8)
+
+    # Labels, title, axis limits, and grid.
+    ax.set_ylabel("Mean Score (1-5)")
+    ax.set_title("Baseline vs Yoda — Mean Rubric Scores")
+    ax.set_xticks(x)
+    ax.set_xticklabels([m.replace("_", "\n") for m in metrics], fontsize=9)
+    ax.set_ylim(0, 5)
+    ax.legend()
+    ax.grid(axis="y", linestyle="--", alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
 
 # ---------------------------------------------------------------------------
 # CLI entry point — run with: python -m yoda.eval.runner [TICKER ...]
