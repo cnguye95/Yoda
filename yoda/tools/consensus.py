@@ -2,23 +2,30 @@
 
 Two public functions:
   get_consensus(ticker)     — analyst EPS / revenue / earnings-date from
-                              Finnhub, with a yfinance backup when free-tier
+                              Finnhub, with an FMP backup when free-tier
                               coverage is absent.
   get_basic_metrics(ticker) — current price, market cap, trailing EPS from
-                              yfinance; always called, not a fallback.
+                              Finnhub; always called, not a fallback.
 """
 
 import sys
 import time
 from datetime import datetime, timezone, date, timedelta
 
+import requests
 import requests.exceptions
 
 import finnhub
 from finnhub.exceptions import FinnhubAPIException
-import yfinance as yf
 
 from yoda import config
+
+
+# ---------------------------------------------------------------------------
+# FMP base URL
+# ---------------------------------------------------------------------------
+
+_FMP_BASE = "https://financialmodelingprep.com/api/v3"
 
 
 # ---------------------------------------------------------------------------
@@ -28,7 +35,7 @@ from yoda import config
 def _finnhub_call(fn):
     # Run a Finnhub API call and distinguish auth failures (which must raise)
     # from premium-gated, empty, or transient network responses (which return
-    # None so the yfinance backup can fill the gap).
+    # None so the FMP backup can fill the gap).
     # One retry on timeout — Finnhub free tier occasionally drops the first
     # connection; a second attempt usually succeeds within ~2s.
     for attempt in range(2):
@@ -104,56 +111,57 @@ def _analyst_count_finnhub(client: finnhub.Client, ticker: str) -> int | None:
 
 
 # ---------------------------------------------------------------------------
-# yfinance backup — fills fields Finnhub free tier leaves empty
+# FMP backup — fills fields Finnhub free tier leaves empty
 # ---------------------------------------------------------------------------
 
-def _consensus_yfinance_backup(ticker: str) -> dict:
-    # Attempt to populate the four consensus fields from yfinance when
-    # Finnhub returns nothing. Best-effort: any field yfinance also lacks
-    # stays None. Exceptions are swallowed so they never crash the main call.
+def _fmp_get(path: str) -> list | dict | None:
+    # Make a single FMP API call. Returns parsed JSON or None on any error.
+    # Best-effort: failures degrade gracefully rather than crashing the caller.
+    try:
+        resp = requests.get(
+            f"{_FMP_BASE}{path}",
+            params={"apikey": config.FMP_API_KEY},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except Exception:
+        return None
+
+
+def _consensus_fmp_backup(ticker: str) -> dict:
+    # Populate consensus fields from FMP when Finnhub free tier leaves them
+    # empty. Uses two endpoints: analyst-estimates for EPS/revenue, and
+    # historical earning_calendar for the next scheduled earnings date.
     result = {
         "next_earnings_date": None,
         "eps_estimate":       None,
         "revenue_estimate":   None,
         "analyst_count":      None,
     }
-    try:
-        # Yahoo Finance rate-limits aggressively on the first request; one
-        # retry after a short sleep resolves transient 429s reliably.
-        cal = None
-        for attempt in range(2):
-            try:
-                cal = yf.Ticker(ticker).calendar
-                break
-            except Exception:
-                if attempt == 0:
-                    time.sleep(3)
-        if not cal:
-            return result
 
-        # calendar is a dict; "Earnings Date" may be a list of Timestamps.
-        earnings_dates = cal.get("Earnings Date")
-        if earnings_dates:
-            first = earnings_dates[0] if isinstance(earnings_dates, list) else earnings_dates
-            if hasattr(first, "strftime"):
-                result["next_earnings_date"] = first.strftime("%Y-%m-%d")
-            else:
-                result["next_earnings_date"] = str(first)
-
-        eps = cal.get("EPS Estimate")
+    # Analyst estimates: EPS and revenue for the next quarter.
+    estimates = _fmp_get(f"/analyst-estimates/{ticker}?period=quarter&limit=1")
+    if estimates and isinstance(estimates, list) and estimates[0]:
+        entry = estimates[0]
+        eps = entry.get("estimatedEpsAvg")
+        rev = entry.get("estimatedRevenueAvg")
         if eps is not None:
             result["eps_estimate"] = float(eps)
-
-        rev = cal.get("Revenue Estimate")
         if rev is not None:
             result["revenue_estimate"] = float(rev)
 
-        opinions = cal.get("Number Of Analyst Opinions")
-        if opinions is not None:
-            result["analyst_count"] = int(opinions)
-
-    except Exception:
-        pass
+    # Earnings calendar: find the next upcoming earnings date for this ticker.
+    today_str = date.today().isoformat()
+    calendar = _fmp_get(f"/historical/earning_calendar/{ticker}?limit=10")
+    if calendar and isinstance(calendar, list):
+        # Entries may include past dates; pick the earliest future one.
+        future_dates = [
+            e["date"] for e in calendar
+            if e.get("date") and e["date"] >= today_str
+        ]
+        if future_dates:
+            result["next_earnings_date"] = min(future_dates)
 
     return result
 
@@ -165,10 +173,10 @@ def _consensus_yfinance_backup(ticker: str) -> dict:
 def get_consensus(ticker: str) -> dict:
     """Analyst consensus estimates for the given ticker.
 
-    Tries Finnhub first. Falls back to yfinance for any field Finnhub leaves
+    Tries Finnhub first. Falls back to FMP for any field Finnhub leaves
     empty (free-tier limitation). Source is 'finnhub' when Finnhub covered at
-    least one field, 'yfinance_backup' when only yfinance helped, or
-    'finnhub_empty' when both returned nothing. Never fabricates data.
+    least one field, 'fmp_backup' when only FMP helped, or 'finnhub_empty'
+    when both returned nothing. Never fabricates data.
 
     Returns a dict with:
         ticker, next_earnings_date, eps_estimate, revenue_estimate,
@@ -191,12 +199,12 @@ def get_consensus(ticker: str) -> dict:
         for v in (next_earnings_date, eps_estimate, revenue_estimate, analyst_count)
     )
 
-    # yfinance backup — merge any field still None after Finnhub.
+    # FMP backup — merge any field still None after Finnhub.
     if not all(
         v is not None
         for v in (next_earnings_date, eps_estimate, revenue_estimate, analyst_count)
     ):
-        backup = _consensus_yfinance_backup(ticker)
+        backup = _consensus_fmp_backup(ticker)
         next_earnings_date = next_earnings_date or backup["next_earnings_date"]
         eps_estimate       = eps_estimate       or backup["eps_estimate"]
         revenue_estimate   = revenue_estimate   or backup["revenue_estimate"]
@@ -210,7 +218,7 @@ def get_consensus(ticker: str) -> dict:
     if finnhub_covered:
         source = "finnhub"
     elif final_any:
-        source = "yfinance_backup"
+        source = "fmp_backup"
     else:
         source = "finnhub_empty"
 
