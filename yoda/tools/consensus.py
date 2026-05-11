@@ -12,6 +12,8 @@ import sys
 import time
 from datetime import datetime, timezone, date, timedelta
 
+import requests.exceptions
+
 import finnhub
 from finnhub.exceptions import FinnhubAPIException
 import yfinance as yf
@@ -24,22 +26,33 @@ from yoda import config
 # ---------------------------------------------------------------------------
 
 def _finnhub_call(fn):
-    # Run a Finnhub API call and distinguish auth/network failures (which
-    # must raise) from premium-gated or empty responses (which return None
-    # so the yfinance backup can fill the gap).
-    try:
-        return fn()
-    except FinnhubAPIException as exc:
-        if exc.status_code == 401:
-            raise RuntimeError(
-                "Finnhub API key rejected (HTTP 401). "
-                "Check FINNHUB_API_KEY in .env."
-            ) from exc
-        # HTTP 403 = premium endpoint not available on free tier.
-        # HTTP 422 or other non-auth errors — treat as empty; yfinance fills in.
-        return None
-    except Exception as exc:
-        raise RuntimeError(f"Finnhub network error: {exc}") from exc
+    # Run a Finnhub API call and distinguish auth failures (which must raise)
+    # from premium-gated, empty, or transient network responses (which return
+    # None so the yfinance backup can fill the gap).
+    # One retry on timeout — Finnhub free tier occasionally drops the first
+    # connection; a second attempt usually succeeds within ~2s.
+    for attempt in range(2):
+        try:
+            return fn()
+        except FinnhubAPIException as exc:
+            if exc.status_code == 401:
+                raise RuntimeError(
+                    "Finnhub API key rejected (HTTP 401). "
+                    "Check FINNHUB_API_KEY in .env."
+                ) from exc
+            # HTTP 403 = premium endpoint, 422 = bad params — treat as empty.
+            return None
+        except requests.exceptions.Timeout:
+            # Transient timeout — retry once, then degrade gracefully.
+            if attempt == 0:
+                time.sleep(2)
+                continue
+            return None
+        except requests.exceptions.RequestException:
+            # Other transient network errors (connection reset, etc.)
+            return None
+        except Exception as exc:
+            raise RuntimeError(f"Finnhub error: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
