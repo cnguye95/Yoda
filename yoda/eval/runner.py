@@ -167,6 +167,14 @@ def run_eval(
 
     Also writes data/eval/results.csv and data/eval/summary.md.
     """
+    import pathlib
+    out_dir = pathlib.Path("data/eval")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    results_path = out_dir / "results.csv"
+
+    # Remove any partial results file from a previous interrupted run.
+    results_path.unlink(missing_ok=True)
+
     rows = []
 
     for ticker in tickers:
@@ -197,16 +205,18 @@ def run_eval(
                 **_scores_to_dict(scores),
             }
             rows.append(row)
+
+            # Write this row immediately so progress survives a crash.
+            pd.DataFrame([row]).to_csv(
+                results_path, mode="a", header=len(rows) == 1, index=False
+            )
             print(f"  mode={mode} done — latency={latency:.1f}s cost=${cost:.4f}")
 
     df = pd.DataFrame(rows)
 
-    # Write the full long-format results.
-    import pathlib
-    out_dir = pathlib.Path("data/eval")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    df.to_csv(out_dir / "results.csv", index=False)
-    print(f"\nResults saved to {out_dir / 'results.csv'}")
+    # Overwrite with the complete, clean DataFrame (removes any partial-write artifacts).
+    df.to_csv(results_path, index=False)
+    print(f"\nResults saved to {results_path}")
 
     # Build and write the summary markdown.
     _write_summary(df, out_dir / "summary.md")
