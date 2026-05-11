@@ -88,14 +88,14 @@ def _capture(fn, *args) -> tuple[EarningsReport, float, float, str]:
     return report, latency, cost, log
 
 
-def _capture_panel(ticker: str, deep: bool) -> tuple[EarningsReport, float, float, str]:
+def _capture_panel(ticker: str) -> tuple[EarningsReport, float, float, str]:
     # Variant of _capture for run_personality_panel which returns
     # (report, personality_results, critique_messages). Extracts the report
     # and discards the trace details (the eval rubric scores the report).
     buf = io.StringIO()
     t0 = time.perf_counter()
     with contextlib.redirect_stdout(buf):
-        report, _personality_results, _critique = run_personality_panel(ticker, deep=deep)
+        report, _personality_results, _critique = run_personality_panel(ticker)
     elapsed = time.perf_counter() - t0
     log = buf.getvalue()
 
@@ -119,7 +119,7 @@ def _run_mode(
         excerpt = _build_baseline_excerpt(filing)
         return _capture(run_baseline, ticker, excerpt)
     elif mode == "panel_deep":
-        return _capture_panel(ticker, deep=True)
+        return _capture_panel(ticker)
     else:
         raise ValueError(f"Unknown mode: {mode}")
 

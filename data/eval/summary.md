@@ -4,14 +4,13 @@
 
 | mode | extraction_completeness | accuracy | source_traceability | relevance | usefulness | latency_seconds | cost_usd |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| agent | 2.67 | 2.67 | 2.33 | 3.0 | 2.33 | 25.76 | 0.05 |
-| baseline | 1.67 | 2.33 | 1.67 | 2.33 | 1.33 | 8.09 | 0.0 |
-| rag_llm | 2.67 | 2.33 | 2.0 | 3.0 | 2.0 | 13.18 | 0.03 |
+| baseline | 1.67 | 2.0 | 1.33 | 2.33 | 1.67 | 7.81 | 0.0 |
+| panel_deep | 2.33 | 2.0 | 2.0 | 3.0 | 2.0 | 78.79 | 0.07 |
 
 ## Mean scores by ticker
 
 | ticker | extraction_completeness | accuracy | source_traceability | relevance | usefulness |
 | --- | --- | --- | --- | --- | --- |
-| COIN | 3.0 | 2.67 | 2.0 | 3.0 | 2.0 |
-| NFLX | 2.33 | 2.67 | 2.33 | 2.67 | 2.0 |
-| PANW | 1.67 | 2.0 | 1.67 | 2.67 | 1.67 |
+| COIN | 2.5 | 2.5 | 2.0 | 3.0 | 2.5 |
+| NFLX | 2.0 | 1.5 | 1.5 | 2.5 | 1.5 |
+| PANW | 1.5 | 2.0 | 1.5 | 2.5 | 1.5 |
