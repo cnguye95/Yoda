@@ -10,3 +10,4 @@ venv/
 data/eval/judge_cache/
 data/reports/
 data/queue_zips/
+.claude/
