@@ -355,6 +355,53 @@ def _data_gaps_section(report: EarningsReport, styles):
     return elements
 
 
+def _hypotheses_section(report: EarningsReport, styles):
+    """Build the Hypotheses Explored section (Phase 10 multi-agent transparency).
+
+    Shows the final panel-investigated hypotheses so the analyst can see what
+    questions were asked and which personality proposed each one. Skips
+    rendering entirely if the field is empty (older modes won't populate it).
+    """
+    elements = []
+
+    # The field defaults to [] on EarningsReport so older reports (baseline,
+    # rag_llm, agent) won't crash here — they just skip the section.
+    if not getattr(report, "hypotheses_explored", None):
+        return elements
+
+    elements.append(Paragraph("Hypotheses Explored", styles['SectionHeader']))
+
+    # Small-font table: ID | Personality | Question. The summary column is
+    # too wide for a single-page table so we expose it inline as a Paragraph
+    # under the row instead.
+    rows = [['ID', 'Personality', 'Question', 'Confidence']]
+    for h in report.hypotheses_explored:
+        rows.append([
+            h.id,
+            h.proposing_personality,
+            Paragraph(h.question, styles['Citation']),
+            f"{h.confidence}/5",
+        ])
+
+    table = Table(rows, colWidths=[0.5*inch, 1.0*inch, 4.5*inch, 0.8*inch])
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#003366')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 9),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f5f5f5')]),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ('FONTSIZE', (0, 1), (-1, -1), 8),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+    ]))
+
+    elements.append(table)
+    elements.append(Spacer(1, 0.2*inch))
+    return elements
+
+
 # ============================================================================
 # Main Public API
 # ============================================================================
@@ -411,6 +458,9 @@ def report_to_pdf(report: EarningsReport, output_path: str, filing_url: str | No
 
     # Bull / bear / watch
     story.extend(_bull_bear_watch_section(report, styles))
+
+    # Hypotheses explored (Phase 10 — only present in panel-mode reports)
+    story.extend(_hypotheses_section(report, styles))
 
     # Data gaps (only if present)
     story.extend(_data_gaps_section(report, styles))

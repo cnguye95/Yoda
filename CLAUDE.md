@@ -3,7 +3,7 @@
 - Wait for approval before implementing
 - Prefer built-ins and stdlib over custom logic
 - No classes unless state genuinely needs to be managed
-- Complexity must be explicitly justified — default to the simplest working solution
+- Complexity must be explicitly justified 
 - Apply YAGNI: don't build for hypothetical future requirements
 - Prefer flat over nested (Zen of Python)
 

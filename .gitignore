@@ -8,3 +8,5 @@ venv/
 .DS_Store
 *.log
 data/eval/judge_cache/
+data/reports/
+data/queue_zips/

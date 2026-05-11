@@ -25,7 +25,7 @@ from yoda import config
 from yoda.ingest.edgar import fetch_latest_filing
 from yoda.ingest.chunker import chunk_filing, Chunk
 from yoda.modes.baseline import _validate_citations
-from yoda.modes.rag_llm import RETRIEVAL_QUERIES, TOP_K
+from yoda.modes.rag_llm import RETRIEVAL_QUERIES, TOP_K, _chunk_heading
 from yoda.retrieval.embeddings import embed_texts
 from yoda.retrieval.vector_store import ChromaStore
 from yoda.schema import EarningsReport
@@ -61,10 +61,10 @@ pre-earnings research reports in JSON format.
 Rules you must follow without exception:
 1. Every entry in key_metrics, revenue_segments, key_risks, and the
    forward_guidance block MUST have a non-empty source_citation field.
-   For facts from the primary filing, cite the exact chunk ID as given
-   (e.g. "MD&A chunk 12" or "Risk Factors chunk 7").
+   For facts from the primary filing, cite the exact label provided in
+   the context (e.g. "MD&A — Revenue Recognition" or "Risk Factors — Cybersecurity").
    For facts from a related company's filing, include the ticker prefix
-   exactly as given (e.g. "MSFT Financial Statements chunk 5").
+   exactly as given (e.g. "MSFT Financial Statements — Net Revenue").
    For facts from news items, cite the article URL exactly as given.
 2. If a fact is not directly supported by the retrieved chunks, the consensus
    block, or the news items provided, do NOT include it in the main fields.
@@ -152,16 +152,17 @@ def _render_chunks_for_prompt(
     primary_ticker: str,
 ) -> str:
     # Render the deduplicated chunk dict as labeled context for the final call.
-    # Primary-ticker chunks are labeled "[SECTION chunk N]".
-    # Related-ticker chunks are labeled "[RELATED_TICKER SECTION chunk N]".
+    # Labels use "Section — Heading" format so citations are human-readable.
+    # Related-ticker chunks are prefixed with the ticker symbol.
     parts = []
     for key, chunk in all_chunks.items():
         # Key format is "{ticker}_{chunk_index}"; split on first "_" only.
         chunk_ticker = key.split("_")[0]
+        heading = _chunk_heading(chunk)
         if chunk_ticker == primary_ticker:
-            label = f"[{chunk.section} chunk {chunk.chunk_index}]"
+            label = f"[{chunk.section} — {heading}]"
         else:
-            label = f"[{chunk_ticker} {chunk.section} chunk {chunk.chunk_index}]"
+            label = f"[{chunk_ticker} {chunk.section} — {heading}]"
         parts.append(f"{label}\n{chunk.text}")
     return "\n\n".join(parts)
 

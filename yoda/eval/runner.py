@@ -29,9 +29,8 @@ from yoda.eval.judge import judge_report
 from yoda.eval.rubric import JudgeScores
 from yoda.ingest.chunker import chunk_filing
 from yoda.ingest.edgar import fetch_latest_filing
-from yoda.modes.agent import run_agent
 from yoda.modes.baseline import run_baseline
-from yoda.modes.rag_llm import run_rag_llm
+from yoda.modes.personality_panel import run_personality_panel
 from yoda.schema import EarningsReport
 
 
@@ -89,12 +88,14 @@ def _capture(fn, *args) -> tuple[EarningsReport, float, float, str]:
     return report, latency, cost, log
 
 
-def _capture_agent(ticker: str) -> tuple[EarningsReport, float, float, str]:
-    # Thin variant of _capture for run_agent which returns (report, trace).
+def _capture_panel(ticker: str, deep: bool) -> tuple[EarningsReport, float, float, str]:
+    # Variant of _capture for run_personality_panel which returns
+    # (report, personality_results, critique_messages). Extracts the report
+    # and discards the trace details (the eval rubric scores the report).
     buf = io.StringIO()
     t0 = time.perf_counter()
     with contextlib.redirect_stdout(buf):
-        report, _trace = run_agent(ticker)
+        report, _personality_results, _critique = run_personality_panel(ticker, deep=deep)
     elapsed = time.perf_counter() - t0
     log = buf.getvalue()
 
@@ -117,10 +118,10 @@ def _run_mode(
     if mode == "baseline":
         excerpt = _build_baseline_excerpt(filing)
         return _capture(run_baseline, ticker, excerpt)
-    elif mode == "rag_llm":
-        return _capture(run_rag_llm, ticker)
-    elif mode == "agent":
-        return _capture_agent(ticker)
+    elif mode == "panel_fast":
+        return _capture_panel(ticker, deep=False)
+    elif mode == "panel_deep":
+        return _capture_panel(ticker, deep=True)
     else:
         raise ValueError(f"Unknown mode: {mode}")
 
@@ -146,7 +147,7 @@ def _scores_to_dict(scores: JudgeScores) -> dict:
 
 def run_eval(
     tickers: list[str],
-    modes: list[str] = ("baseline", "rag_llm", "agent"),
+    modes: list[str] = ("baseline", "panel_fast", "panel_deep"),
 ) -> pd.DataFrame:
     """Run each (ticker, mode) pair, judge it, return a long-format DataFrame.
 

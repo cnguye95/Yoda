@@ -54,16 +54,16 @@ RETRIEVAL_QUERIES = [
 TOP_K = 5
 
 # System prompt for the RAG generation call. Same "cite or skip" contract as
-# the baseline, but citations must name the chunk ID format returned by the
-# vector store (e.g. "MD&A chunk 12") rather than a filing section heading.
+# the baseline, but citations must name the section heading label provided
+# in the context (e.g. "MD&A — Revenue Recognition").
 _SYSTEM_PROMPT = """You are a financial analyst assistant that produces structured
 pre-earnings research reports in JSON format.
 
 Rules you must follow without exception:
 1. Every entry in key_metrics, revenue_segments, key_risks, and the
    forward_guidance block MUST have a non-empty source_citation field.
-   For facts from the filing, cite the exact chunk ID provided in the
-   context (e.g. "MD&A chunk 12" or "Risk Factors chunk 7").
+   For facts from the filing, cite the exact label provided in the
+   context (e.g. "MD&A — Revenue Recognition" or "Risk Factors — Cybersecurity").
    For facts from news items, cite the article URL exactly as given.
 2. If a fact is not directly supported by the retrieved chunks, the consensus
    block, or the news items provided, do NOT include it in the main fields.
@@ -83,6 +83,21 @@ Rules you must follow without exception:
 # ---------------------------------------------------------------------------
 
 _client = OpenAI(api_key=config.OPENAI_API_KEY)
+
+
+# ---------------------------------------------------------------------------
+# Citation helpers
+# ---------------------------------------------------------------------------
+
+def _chunk_heading(chunk) -> str:
+    # Extract the first short non-empty line from the chunk text to use as a
+    # human-readable heading in citations (e.g. "Revenue Recognition").
+    # Falls back to the section label if no line is short enough.
+    for line in chunk.text.splitlines():
+        stripped = line.strip()
+        if stripped and len(stripped) <= 80:
+            return stripped
+    return chunk.section
 
 
 # ---------------------------------------------------------------------------
@@ -183,9 +198,10 @@ def run_rag_llm(ticker: str) -> EarningsReport:
     # ------------------------------------------------------------------
     now_utc = datetime.now(timezone.utc).isoformat()
 
-    # Render each retrieved chunk with its chunk ID label so the LLM can cite it.
+    # Render each retrieved chunk with a descriptive label so the LLM can cite
+    # it by section and heading rather than an opaque chunk number.
     chunks_section = "\n\n".join(
-        f"[{c.section} chunk {c.chunk_index}]\n{c.text}"
+        f"[{c.section} — {_chunk_heading(c)}]\n{c.text}"
         for c in unique_chunks
     )
 
