@@ -1,6 +1,6 @@
 # Yoda — Pre-Earnings Research Assistant
 
-> **Status:** Phase 10 (multi-agent personality panel) complete. Latest evaluation pits the production **panel_deep** mode against the prompt-only baseline across NFLX, COIN, and PANW — panel_deep wins on every rubric dimension. Numbers and a comparison chart are in [`data/eval/summary.md`](data/eval/summary.md) and [`data/eval/comparison.png`](data/eval/comparison.png).
+> **Status:** Phase 10 (multi-agent personality panel) complete. Latest evaluation pits **Yoda** against the prompt-only baseline across NFLX, COIN, and PANW — Yoda wins on every rubric dimension. Numbers and a comparison chart are in [`data/eval/summary.md`](data/eval/summary.md) and [`data/eval/comparison.png`](data/eval/comparison.png).
 
 ---
 ## 1. Context, User, and Problem
@@ -19,13 +19,9 @@
 
 Yoda fetches the most recent 10-Q (and, when available within the same 92-day window, the supplemental 10-K) from SEC EDGAR for a given ticker, chunks each filing by section, embeds and indexes them in a local ChromaDB vector store, enriches with analyst consensus and news, and generates a structured `EarningsReport` via a multi-agent personality panel. The report downloads as a PDF; a Queue tab batches multiple tickers and bundles the PDFs into a ZIP.
 
-### Two Modes
+### How Yoda Works
 
-Both modes run the same multi-agent pipeline in `yoda/modes/personality_panel.py`; they differ only in how deeply each personality investigates and whether a cross-critique phase runs.
-
-- **Fast (~40s)** — six personalities (Optimist, Pessimist, Conservative, Dreamer, Contrarian, Quant) each run a tool-use loop with a tighter budget (3 tool calls, 25s wall-clock), then gpt-4o synthesizes the final report directly. Phase 3 cross-critique is skipped. Intended for wide ticker coverage when triaging an overnight queue.
-
-- **Deep (~90s)** — same six personalities with a larger budget (6 tool calls, 45s wall-clock), followed by a cross-critique phase where each personality emits SUPPORTS / CHALLENGES / EXTENDS messages on its peers' hypotheses. A deterministic filter retains/contests/drops hypotheses, then gpt-4o synthesizes a report that surfaces contested items inside the watchlist. Intended for a focused pre-earnings deep dive on a single ticker.
+Yoda runs a six-personality panel via `yoda/modes/personality_panel.py`. Six personalities (Optimist, Pessimist, Conservative, Dreamer, Contrarian, Quant) each run parallel tool-use loops (6 tool calls, 45s wall-clock), followed by a cross-critique phase where each personality emits SUPPORTS / CHALLENGES / EXTENDS messages on its peers' hypotheses. A deterministic filter retains/contests/drops hypotheses, then gpt-4o synthesizes a final report that surfaces contested items inside the watchlist. Typical latency: ~90s per ticker.
 
 Each personality uses three tools: `retrieve_filing` (semantic search across both the 10-Q and the supplemental 10-K when present), `search_news` (Tavily web search — all URLs accumulate into a shared news pool), and `lookup_peer` (fetch + chunk + search a competitor's filing on demand). The synthesizer then writes a structured `EarningsReport` whose watchlist items each carry 0–3 starting-point URLs drawn from that shared pool, validated against it so synthesis cannot invent links.
 
@@ -53,7 +49,7 @@ Each personality uses three tools: `retrieve_filing` (semantic search across bot
 │  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────────┐    │
 │  │ Single Ticker    │  │ Queue (batch)    │  │ Eval Harness         │    │
 │  │ Streamlit tab    │  │ Streamlit tab    │  │ yoda/eval/runner.py  │    │
-│  │ Fast / Deep      │  │ many → ZIP       │  │ + judge.py           │    │
+│  │ Yoda             │  │ many → ZIP       │  │ + judge.py           │    │
 │  └────────┬─────────┘  └────────┬─────────┘  └──────────┬───────────┘    │
 │           │                     │                       │                │
 │           ▼                     ▼                       │                │
@@ -76,7 +72,7 @@ Each personality uses three tools: `retrieve_filing` (semantic search across bot
 │                         │                               │                │
 │                         ▼                               │                │
 │  ┌────────────────────────────────────────────────┐     │                │
-│  │  Cross-Critique (Deep only) + Synthesis        │     │                │
+│  │  Cross-Critique + Synthesis                    │     │                │
 │  │  gpt-4o  →  EarningsReport (Pydantic)          │     │                │
 │  └──────────┬─────────────────────┬───────────────┘     │                │
 │             │                     │                     │                │
@@ -105,7 +101,7 @@ app.py (Streamlit — Single ticker + Queue tabs)
     ├── yoda/retrieval/                  # text-embedding-3-small + ChromaDB
     ├── yoda/tools/consensus.py          # Finnhub + FMP backup
     ├── yoda/tools/news.py               # Tavily search
-    ├── yoda/modes/personality_panel.py  # Phase 10: 6-personality panel (Fast/Deep)
+    ├── yoda/modes/personality_panel.py  # Phase 10: 6-personality panel
     ├── yoda/modes/tools.py              # tool registry shared across personalities
     ├── yoda/modes/rag_llm.py            # Legacy mode (kept as smoke test)
     ├── yoda/modes/agent.py              # Legacy mode (kept as smoke test)
@@ -161,17 +157,17 @@ Mean scores across 3 tickers (higher is better; max 5):
 
 | Mode | Extract | Accuracy | Traceability | Relevance | Usefulness | Latency | Cost/report |
 |---|---|---|---|---|---|---|---|
-| **panel_deep** | **3.33** | **3.0** | **2.0** | **3.33** | **3.0** | 93.0s | ~$0.09 |
+| **Yoda**       | **3.33** | **3.0** | **2.0** | **3.33** | **3.0** | 93.0s | ~$0.09 |
 | **Baseline** | 1.67 | 2.0 | 1.67 | 2.33 | 1.33 | 9.6s | ~$0.00 |
 
-![Mean rubric scores by mode — baseline vs panel_deep](data/eval/comparison.png)
+![Mean rubric scores by mode — Baseline vs Yoda](data/eval/comparison.png)
 
 **Key findings:**
 
-- **panel_deep wins every dimension.** Largest gaps are on extraction completeness (3.33 vs 1.67) and usefulness (3.0 vs 1.33) — the panel's tool-augmented investigation lets the synthesizer mine the full filing for line items rather than working from a static 5000-character slice.
-- **Source traceability is the rubric's hardest dimension** for both modes (2.0 panel_deep, 1.67 baseline). Citation pipeline hardening landed late in the cycle: `_chunk_heading()` now rejects mid-word fragments so labels like `MD&A — inancial instruments` no longer propagate, and a post-synthesis scrubber strips any news URL / outlet name that leaks into `source_citation`, replacing it with the bare section label. Both fixes are wired into `personality_panel`; the run reflected in the table above predates them.
-- **Latency cost.** panel_deep takes ~93 s/ticker vs ~10 s for the baseline because each of six personalities runs a parallel tool-use loop followed by cross-critique and a final synthesis pass. The $0.09 spend per report is dominated by the gpt-4o synthesis step.
-- **COIN outperforms PANW** in panel_deep, likely because Coinbase's 10-K has cleaner tabular financial data that chunks and retrieves more predictably than PANW's narrative-heavy risk sections.
+- **Yoda wins every dimension.** Largest gaps are on extraction completeness (3.33 vs 1.67) and usefulness (3.0 vs 1.33) — the panel's tool-augmented investigation lets the synthesizer mine the full filing for line items rather than working from a static 5000-character slice.
+- **Source traceability is the rubric's hardest dimension** for both modes (2.0 Yoda, 1.67 baseline). Citation pipeline hardening landed late in the cycle: `_chunk_heading()` now rejects mid-word fragments so labels like `MD&A — inancial instruments` no longer propagate, and a post-synthesis scrubber strips any news URL / outlet name that leaks into `source_citation`, replacing it with the bare section label. Both fixes are wired into `personality_panel`; the run reflected in the table above predates them.
+- **Latency cost.** Yoda takes ~93 s/ticker vs ~10 s for the baseline because each of six personalities runs a parallel tool-use loop followed by cross-critique and a final synthesis pass. The $0.09 spend per report is dominated by the gpt-4o synthesis step.
+- **COIN outperforms PANW** in Yoda, likely because Coinbase's 10-K has cleaner tabular financial data that chunks and retrieves more predictably than PANW's narrative-heavy risk sections.
 
 Full per-ticker results are in [`data/eval/results.csv`](data/eval/results.csv) and [`data/eval/summary.md`](data/eval/summary.md).
 
@@ -189,22 +185,21 @@ The app has two tabs: **Single ticker** (interactive, one report at a time) and 
 │  [ Single ticker ] [ Queue (batch) ]             │
 │                                                  │
 │  Ticker  [  NFLX                  ]              │
-│  Mode    ● Fast (~40s)   ○ Deep (~90s)           │
 │                                                  │
 │  [  Generate Report  ]                           │
 └─────────────────────────────────────────────────┘
            ↓ (on click)
 ┌─────────────────────────────────────────────────┐
-│  ⏳ Generating Fast report for NFLX...           │
+│  ⏳ Generating report for NFLX...                │
 │  ┌───────────────────────────────────────────┐  │
-│  │ [panel:fast] Fetching filing for NFLX...  │  │
-│  │ [panel:fast] Filing: 10-Q 2026-04-18      │  │
-│  │ [panel:fast] Supplemental: 10-K 2026-...  │  │
-│  │ [panel:fast] Phase 2: 6 personalities...  │  │
+│  │ [panel] Fetching filing for NFLX...       │  │
+│  │ [panel] Filing: 10-Q 2026-04-18           │  │
+│  │ [panel] Supplemental: 10-K 2026-...       │  │
+│  │ [panel] Phase 2: 6 personalities...       │  │
 │  │ [Optimist] iter 1: retrieve_filing(...)   │  │
 │  │ [Pessimist] iter 1: search_news(...)      │  │
 │  │ [Quant]    iter 2: lookup_peer('DIS',...) │  │
-│  │ [panel:fast] Phase 4: synthesizing...     │  │
+│  │ [panel] Phase 4: synthesizing...          │  │
 │  └───────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────┘
            ↓ (complete)
@@ -226,7 +221,7 @@ The app has two tabs: **Single ticker** (interactive, one report at a time) and 
 └─────────────────────────────────────────────────┘
 ```
 
-### Sample Report Fields (NFLX, personality_panel mode)
+### Sample Report Fields (NFLX)
 
 ```json
 {
@@ -312,7 +307,7 @@ SEC_USER_AGENT="Your Name your@email.com"
 streamlit run app.py
 ```
 
-Open [http://localhost:8501](http://localhost:8501), enter a ticker (e.g. `NFLX`), pick **Fast** or **Deep**, and click **Generate Report**. For batch runs, switch to the **Queue (batch)** tab, paste multiple tickers (one per line or comma-separated), and run them sequentially — PDFs save to `data/reports/` as they complete and bundle into a downloadable ZIP at the end.
+Open [http://localhost:8501](http://localhost:8501), enter a ticker (e.g. `NFLX`) and click **Generate Report**. For batch runs, switch to the **Queue (batch)** tab, paste multiple tickers (one per line or comma-separated), and run them sequentially — PDFs save to `data/reports/` as they complete and bundle into a downloadable ZIP at the end.
 
 The first run for a ticker fetches and indexes the SEC filings — both the 10-Q (primary) and the 10-K (supplemental) when both are within the 92-day freshness window. Subsequent runs for the same ticker are fast because the filings and ChromaDB index are cached to disk.
 
@@ -332,8 +327,7 @@ Outputs `data/eval/results.csv` and `data/eval/summary.md`. Judge results are ca
 
 ```bash
 # Multi-agent personality panel — current production mode
-python -m yoda.modes.personality_panel NFLX --fast
-python -m yoda.modes.personality_panel NFLX --deep
+python -m yoda.modes.personality_panel NFLX
 
 # Legacy modes (kept as harnesses; not used by the Streamlit app)
 python -m yoda.modes.baseline
@@ -378,7 +372,7 @@ yoda/
 │   │   ├── consensus.py                # Finnhub + FMP backup
 │   │   └── news.py                     # Tavily wrapper
 │   ├── modes/
-│   │   ├── personality_panel.py        # Phase 10: 6-personality panel (Fast/Deep)
+│   │   ├── personality_panel.py        # Phase 10: 6-personality panel
 │   │   ├── tools.py                    # Tool registry (retrieve_filing, search_news, lookup_peer)
 │   │   ├── baseline.py                 # Prompt-only baseline (eval lower bound)
 │   │   ├── rag_llm.py                  # Legacy Mode 1 (kept as smoke test)
