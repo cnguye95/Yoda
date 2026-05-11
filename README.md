@@ -149,7 +149,7 @@ Reports were scored by `claude-sonnet-4-6` through `yoda/eval/judge.py` (cross-f
 
 ### Test Set
 
-Three tickers across different sectors: **NFLX** (media/streaming), **COIN** (crypto exchange), **PANW** (cybersecurity).
+Fifty major US-listed stocks with at least 3 years of public trading history, spanning technology, financials, healthcare, energy, consumer goods, defense, and more. See [CURATED_TICKERS in runner.py](yoda/eval/runner.py) for the full list.
 
 ### Results
 
@@ -162,12 +162,6 @@ Mean scores across 3 tickers (higher is better; max 5):
 
 ![Mean rubric scores by mode — Baseline vs Yoda](data/eval/comparison.png)
 
-**Key findings:**
-
-- **Yoda wins every dimension.** Largest gaps are on extraction completeness (3.33 vs 1.67) and usefulness (3.0 vs 1.33) — the panel's tool-augmented investigation lets the synthesizer mine the full filing for line items rather than working from a static 5000-character slice.
-- **Source traceability is the rubric's hardest dimension** for both modes (2.0 Yoda, 1.67 baseline). Citation pipeline hardening landed late in the cycle: `_chunk_heading()` now rejects mid-word fragments so labels like `MD&A — inancial instruments` no longer propagate, and a post-synthesis scrubber strips any news URL / outlet name that leaks into `source_citation`, replacing it with the bare section label. Both fixes are wired into `personality_panel`; the run reflected in the table above predates them.
-- **Latency cost.** Yoda takes ~93 s/ticker vs ~10 s for the baseline because each of six personalities runs a parallel tool-use loop followed by cross-critique and a final synthesis pass. The $0.09 spend per report is dominated by the gpt-4o synthesis step.
-- **COIN outperforms PANW** in Yoda, likely because Coinbase's 10-K has cleaner tabular financial data that chunks and retrieves more predictably than PANW's narrative-heavy risk sections.
 
 Full per-ticker results are in [`data/eval/results.csv`](data/eval/results.csv) and [`data/eval/summary.md`](data/eval/summary.md).
 
