@@ -4,13 +4,5 @@
 
 | mode | extraction_completeness | accuracy | source_traceability | relevance | usefulness | latency_seconds | cost_usd |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| baseline | 1.67 | 2.0 | 1.67 | 2.33 | 1.33 | 9.64 | 0.0 |
-| panel_deep | 3.33 | 3.0 | 2.0 | 3.33 | 3.0 | 92.98 | 0.09 |
-
-## Mean scores by ticker
-
-| ticker | extraction_completeness | accuracy | source_traceability | relevance | usefulness |
-| --- | --- | --- | --- | --- | --- |
-| COIN | 3.0 | 3.5 | 2.0 | 3.0 | 2.5 |
-| NFLX | 2.0 | 2.0 | 2.0 | 2.5 | 1.5 |
-| PANW | 2.5 | 2.0 | 1.5 | 3.0 | 2.5 |
+| baseline | 1.0 | 2.0 | 2.0 | 2.0 | 1.0 | 12.01 | 0.0 |
+| panel_deep | 3.0 | 2.0 | 3.0 | 3.0 | 2.0 | 80.98 | 0.08 |

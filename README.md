@@ -120,6 +120,21 @@ app.py (Streamlit — Single ticker + Queue tabs)
 
 ## 3. Evaluation and Results
 
+### Evaluation Scope
+
+By default, `run_eval()` evaluates against a **curated universe of 50 major US-listed stocks**, all public for >3 years. This standardized scope ensures:
+- **Consistency**: Identical ticker set across evaluation runs for meaningful comparison
+- **Quality**: Only established, high-liquidity companies (market cap >$10B)
+- **Coverage**: Diverse sectors (tech, finance, healthcare, energy, etc.)
+
+See [CURATED_TICKERS in runner.py](yoda/eval/runner.py) for the full list. To evaluate a custom set:
+```bash
+python -m yoda.eval.runner NFLX AAPL JPM  # Custom tickers
+python -m yoda.eval.runner NFLX            # Single ticker (quick test, ~$0.30, 3-5 min)
+```
+
+**Cost / Latency**: 50 tickers × 2 modes ≈ $15–20 per full run, 2–3 hours. Single ticker is ~$0.30 and 3–5 min for verification.
+
 ### Baseline
 
 A **prompt-only baseline** (`yoda/modes/baseline.py`) makes a single `gpt-4o` call with a manually sliced ~5000-character excerpt from the filing (MD&A preferred, Financial Statements fallback). No RAG, no agent loop. This represents the "just give the LLM a chunk of the filing" approach and sets the lower bound.

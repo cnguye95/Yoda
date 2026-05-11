@@ -14,8 +14,9 @@ All three modes already print these consistently, so we capture stdout rather
 than refactoring the mode APIs.
 
 CLI: python -m yoda.eval.runner [TICKER [TICKER ...]]
-Default ticker: NFLX (cheap verification run, ~$0.30, 3-5 min).
-Full set: AAPL AMZN JPM PANW NFLX COIN
+Default tickers: CURATED_TICKERS (50 major US-listed stocks, ~$15/run, 2-3 hours).
+Quick test: python -m yoda.eval.runner NFLX (~$0.30, 3-5 min).
+Custom override: python -m yoda.eval.runner AAPL AMZN JPM PANW NFLX COIN
 """
 
 import contextlib
@@ -32,6 +33,17 @@ from yoda.ingest.edgar import fetch_latest_filing
 from yoda.modes.baseline import run_baseline
 from yoda.modes.personality_panel import run_personality_panel
 from yoda.schema import EarningsReport
+
+
+# Curated universe of 50 major US-listed stocks (public >3 years).
+# Used as default evaluation scope for standardized comparisons.
+CURATED_TICKERS = [
+    "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK.B", "JNJ", "V",
+    "WMT", "JPM", "PG", "MA", "DIS", "BA", "ADBE", "CRM", "NKE", "MCD",
+    "KO", "PEP", "ABT", "ABBV", "XOM", "MRK", "NVO", "CVX", "ACN", "AMD",
+    "HON", "ETN", "INTU", "CSCO", "CAT", "QCOM", "INTC", "IBM", "AVGO", "NEE",
+    "LMT", "GILD", "TMUS", "MDLZ", "PYPL", "TJX", "COST", "ADP", "NFLX", "PANW",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +212,11 @@ def run_eval(
     _write_summary(df, out_dir / "summary.md")
     print(f"Summary saved to {out_dir / 'summary.md'}")
 
+    # Generate comparison chart as a top-level output.
+    chart_path = out_dir / "comparison.png"
+    _write_chart(df, chart_path)
+    print(f"Chart saved to {chart_path}")
+
     return df
 
 
@@ -244,11 +261,6 @@ def _write_summary(df: pd.DataFrame, path) -> None:
 
     import pathlib
     pathlib.Path(path).write_text("\n".join(lines), encoding="utf-8")
-
-    # Emit a side-by-side bar chart for presentation slides.
-    chart_path = pathlib.Path(path).parent / "comparison.png"
-    _write_chart(df, chart_path)
-    print(f"Chart saved to {chart_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -309,8 +321,8 @@ def _write_chart(df: pd.DataFrame, path) -> None:
 if __name__ == "__main__":
     import sys
 
-    # Default to NFLX-only for the verification gate (~$0.30, 3-5 min).
-    # Full run: python -m yoda.eval.runner AAPL AMZN JPM PANW NFLX COIN
-    tickers = sys.argv[1:] if len(sys.argv) > 1 else ["NFLX"]
+    # Default to the curated 50-ticker universe for comprehensive evaluation.
+    # Override with CLI args: python -m yoda.eval.runner NFLX AAPL (for quick tests)
+    tickers = sys.argv[1:] if len(sys.argv) > 1 else CURATED_TICKERS
     df = run_eval(tickers)
     print(df.to_string(index=False))
