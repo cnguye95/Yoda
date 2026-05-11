@@ -656,9 +656,26 @@ Rules you must follow without exception:
 
 1. Every entry in key_metrics, revenue_segments, key_risks, and the
    forward_guidance block MUST have a non-empty source_citation field.
-   Cite using the section-heading format the analysts used (e.g.,
-   "MD&A — Revenue Recognition" or "Risk Factors — Cybersecurity").
-   For news-derived facts, cite the article URL exactly as given.
+   Copy the source_citation label VERBATIM from the hypothesis evidence
+   that supports the fact (e.g., if the hypothesis says
+   "MD&A — Results of Operations", use exactly that string — do NOT
+   rephrase, abbreviate, or reconstruct it). For news-derived facts,
+   cite the article URL exactly as given.
+
+   key_metrics and revenue_segments figures MUST be derived from
+   filing evidence in the hypotheses. Do NOT use figures from news
+   articles, external URLs, or analyst estimates for these fields —
+   even if a hypothesis mentions an external figure in passing. If a
+   metric is only known from external sources, omit it from key_metrics
+   and record it in data_gaps instead.
+
+   When populating revenue_segments or key_metrics with YoY figures,
+   label periods explicitly (e.g. "Q1 FY2026 vs Q1 FY2025"). The
+   CURRENT reporting period value goes in the `value` field. When a
+   table in the evidence shows two figures side-by-side, the first
+   column is typically current period and the second is prior period —
+   verify this from context before copying. If you cannot determine
+   which period is current, omit the metric and note it in data_gaps.
 
 2. recent_news items MUST carry the exact url field from the news pool you
    are given. Do NOT synthesize URLs. Do NOT shorten URLs. Do NOT omit URLs.

@@ -141,10 +141,18 @@ def judge_report(report: EarningsReport, filing_text: str) -> JudgeScores:
     # rather than nested dicts. Only attempt parse on strings that look like
     # JSON objects (start with '{') to leave plain strings like overall_comment
     # untouched.
-    coerced = {
-        k: (json.loads(v) if isinstance(v, str) and v.startswith("{") else v)
-        for k, v in scores_dict.items()
-    }
+    def _try_parse(v):
+        if isinstance(v, str) and v.startswith("{"):
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                pass
+        return v
+
+    coerced = {k: _try_parse(v) for k, v in scores_dict.items()}
+    # The model also occasionally wraps overall_comment in a one-key dict.
+    if isinstance(coerced.get("overall_comment"), dict):
+        coerced["overall_comment"] = coerced["overall_comment"].get("overall_comment", "")
     scores = JudgeScores.model_validate(coerced)
 
     # Persist to cache before returning.
