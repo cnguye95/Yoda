@@ -145,7 +145,8 @@ def _metrics_table(report: EarningsReport, styles, filing_url: str | None = None
         if filing_url:
             citation_text = f'<a href="{filing_url}">{metric.source_citation}</a>'
         rows.append([
-            metric.name,
+            # Wrap in Paragraph so long names word-wrap within the cell.
+            Paragraph(metric.name, styles['Normal']),
             value_str,
             Paragraph(citation_text, styles['Citation']),
         ])
@@ -153,8 +154,8 @@ def _metrics_table(report: EarningsReport, styles, filing_url: str | None = None
     if len(rows) == 1:  # Only header, no data
         rows.append(['(None)', '—', '—'])
 
-    # Table styling
-    table = Table(rows, colWidths=[2.0*inch, 1.5*inch, 2.5*inch])
+    # Table styling — Metric column gets 3.0" to fit long names without overflow.
+    table = Table(rows, colWidths=[3.0*inch, 1.5*inch, 2.5*inch])
     table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#003366')),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
