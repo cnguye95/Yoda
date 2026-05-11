@@ -67,6 +67,17 @@ class ConsensusBlock(BaseModel):
     source: str            # "finnhub" | "fmp_backup" | "finnhub_empty"
 
 
+class WatchItem(BaseModel):
+    # One pre-earnings watchlist entry. text holds the existing two-part
+    # format: "**Heading:** analysis paragraph\n\n-> Monitor ...".
+    # relevant_urls carries 0-3 URLs from the investigation's news_pool so the
+    # analyst has direct starting points for digging deeper on this specific
+    # recommendation. URLs are validated against the pool by the orchestrator
+    # — synthesis cannot invent new ones.
+    text: str
+    relevant_urls: list[str] = []
+
+
 # ---------------------------------------------------------------------------
 # Multi-agent personality panel models — Phase 10
 # ---------------------------------------------------------------------------
@@ -111,6 +122,8 @@ class EarningsReport(BaseModel):
     company_name: str
     filing_type: str           # "10-Q" or "10-K"
     filing_date: str           # ISO date of the most recent filing
+    supplemental_filing_type: str | None = None  # e.g. "10-K" when primary is a 10-Q
+    supplemental_filing_date: str | None = None  # ISO date of the supplemental filing
     report_generated_at: str   # ISO-8601 UTC timestamp
 
     # Core analysis — all source_citation fields are required (not optional)
@@ -126,7 +139,7 @@ class EarningsReport(BaseModel):
     # Synthesis — LLM-generated, no citation required for these lists
     bull_case:    list[str]
     bear_case:    list[str]
-    what_to_watch: list[str]
+    what_to_watch: list[WatchItem]
 
     # Transparency — REQUIRED to list anything the system could not cite.
     # An empty list is fine when everything is covered; it must never be omitted.
@@ -179,7 +192,12 @@ if __name__ == "__main__":
         ),
         bull_case=["Ad-tier ARPU rising"],
         bear_case=["Content cost pressure"],
-        what_to_watch=["Ad-tier ARPU (Optimist vs Pessimist disagree)"],
+        what_to_watch=[
+            WatchItem(
+                text="**Ad-tier ARPU:** Growth is debated.\n\n-> Monitor ad-tier ARPU in the next print.",
+                relevant_urls=["https://example.com/article"],
+            ),
+        ],
         data_gaps=[],
         hypotheses_explored=[
             Hypothesis(

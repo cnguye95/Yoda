@@ -1,6 +1,6 @@
 # Yoda — Pre-Earnings Research Assistant
 
-> **Status:** All 9 phases complete. Evaluation results across NFLX, COIN, and PANW are in [`data/eval/summary.md`](data/eval/summary.md).
+> **Status:** Phase 10 (multi-agent personality panel) complete. Evaluation results from the prior modes across NFLX, COIN, and PANW are in [`data/eval/summary.md`](data/eval/summary.md).
 
 ---
 ## 1. Context, User, and Problem
@@ -17,41 +17,49 @@
 
 ## 2. Solution and Design
 
-Yoda fetches the most recent 10-Q (or 10-K fallback) from SEC EDGAR for a given ticker, chunks it by section, embeds and indexes it in a local ChromaDB vector store, enriches with analyst consensus and news, and generates a structured `EarningsReport` with two different retrieval strategies. The report downloads as a PDF.
+Yoda fetches the most recent 10-Q (and, when available within the same 92-day window, the supplemental 10-K) from SEC EDGAR for a given ticker, chunks each filing by section, embeds and indexes them in a local ChromaDB vector store, enriches with analyst consensus and news, and generates a structured `EarningsReport` via a multi-agent personality panel. The report downloads as a PDF; a Queue tab batches multiple tickers and bundles the PDFs into a ZIP.
 
 ### Two Modes
 
-Both modes share the same ingestion and presentation layers; they differ in how they retrieve evidence before generation.
+Both modes run the same multi-agent pipeline in `yoda/modes/personality_panel.py`; they differ only in how deeply each personality investigates and whether a cross-critique phase runs.
 
-- **RAG-LLM mode** (`yoda/modes/rag_llm.py`) — fixed pipeline. Runs 5 predefined retrieval queries (revenue segments, forward guidance, risk factors, capex/margins, changes from prior filing), pulls consensus estimates and news, and generates the report in a single structured LLM call. Fast and consistent; intended for wide ticker coverage.
+- **Fast (~40s)** — six personalities (Optimist, Pessimist, Conservative, Dreamer, Contrarian, Quant) each run a tool-use loop with a tighter budget (3 tool calls, 25s wall-clock), then gpt-4o synthesizes the final report directly. Phase 3 cross-critique is skipped. Intended for wide ticker coverage when triaging an overnight queue.
 
-- **Agent-Reasoning mode** (`yoda/modes/agent.py`) — ReAct loop. Starts with the same initial retrieval, then iterates: observe → identify gaps → call tools (extra retrieval, news lookup, related-company lookup) → observe → repeat. Terminates at FINISH or a hard iteration cap. The full reasoning trace is streamed to the UI for auditability.
+- **Deep (~90s)** — same six personalities with a larger budget (6 tool calls, 45s wall-clock), followed by a cross-critique phase where each personality emits SUPPORTS / CHALLENGES / EXTENDS messages on its peers' hypotheses. A deterministic filter retains/contests/drops hypotheses, then gpt-4o synthesizes a report that surfaces contested items inside the watchlist. Intended for a focused pre-earnings deep dive on a single ticker.
+
+Each personality uses three tools: `retrieve_filing` (semantic search across both the 10-Q and the supplemental 10-K when present), `search_news` (Tavily web search — all URLs accumulate into a shared news pool), and `lookup_peer` (fetch + chunk + search a competitor's filing on demand). The synthesizer then writes a structured `EarningsReport` whose watchlist items each carry 0–3 starting-point URLs drawn from that shared pool, validated against it so synthesis cannot invent links.
 
 ### Key Design Choices
 
 | Choice | Rationale |
 |---|---|
-| `gpt-4o` for generation, `gpt-4o-mini` for agent steps | Accuracy where it counts; cost control in the loop |
+| `gpt-4o` for synthesis, `gpt-4o-mini` for personality loops + critique | Accuracy where it counts; cost control in the 6× parallel loops |
+| Six-personality panel + typed cross-critique | Forces the report to consider divergent lenses (optimism, skepticism, balance-sheet, long-horizon, contrarian, quant) before synthesizing one analyst voice; cross-critique flags contested claims for the watchlist |
+| 10-Q primary + 10-K supplemental ingest | The 10-Q has the freshest quarterly data for pre-earnings; the 10-K supplies annual narrative when both are within the 92-day window |
+| Finnhub consensus with FMP backup | Finnhub free tier is sparse; `yoda/tools/consensus.py` falls back to FMP when Finnhub returns nothing |
 | ChromaDB persistent client | No native deps on Windows; persists across runs without a server |
 | `reportlab` for PDF (not weasyprint) | weasyprint requires GTK3/Pango/Cairo native libs on Windows; reportlab is pure Python |
-| Hand-rolled ReAct loop | More transparent than LangGraph; every step is loggable and inspectable |
-| Cite-or-skip rule | Any uncitable fact goes to `data_gaps` instead of the report; the LLM is instructed to never fill gaps with general knowledge |
+| Cite-or-skip rule + URL-pool validation | Any uncitable fact goes to `data_gaps`; every news URL and watchlist URL is validated against the investigation's news pool so synthesis cannot fabricate links |
 | `claude-sonnet-4-6` as eval judge | Different model family from the OpenAI-based generation system; prevents same-model bias in scoring |
 
 ### Architecture
 
 ```
-app.py (Streamlit)
-    ├── yoda/ingest/edgar.py       # SEC EDGAR fetch + disk cache
-    ├── yoda/ingest/chunker.py     # section-aware HTML → text chunks
-    ├── yoda/retrieval/            # text-embedding-3-small + ChromaDB
-    ├── yoda/tools/consensus.py    # Finnhub + FMP fallback
-    ├── yoda/tools/news.py         # Tavily search
-    ├── yoda/modes/rag_llm.py      # Mode 1: fixed pipeline
-    ├── yoda/modes/agent.py        # Mode 2: ReAct loop
-    ├── yoda/schema.py             # EarningsReport Pydantic model
-    ├── yoda/report/pdf.py         # EarningsReport → PDF (reportlab)
-    └── yoda/eval/                 # Phase 9 evaluation harness
+app.py (Streamlit — Single ticker + Queue tabs)
+    ├── yoda/ingest/edgar.py             # SEC EDGAR fetch + disk cache (10-Q primary + 10-K supplemental)
+    ├── yoda/ingest/chunker.py           # section-aware HTML → text chunks
+    ├── yoda/retrieval/                  # text-embedding-3-small + ChromaDB
+    ├── yoda/tools/consensus.py          # Finnhub + FMP backup
+    ├── yoda/tools/news.py               # Tavily search
+    ├── yoda/modes/personality_panel.py  # Phase 10: 6-personality panel (Fast/Deep)
+    ├── yoda/modes/tools.py              # tool registry shared across personalities
+    ├── yoda/modes/rag_llm.py            # Legacy mode (kept as smoke test)
+    ├── yoda/modes/agent.py              # Legacy mode (kept as smoke test)
+    ├── yoda/modes/baseline.py           # Prompt-only baseline (eval lower bound)
+    ├── yoda/queue/processor.py          # Batch processor: many tickers → ZIP
+    ├── yoda/schema.py                   # EarningsReport + WatchItem Pydantic models
+    ├── yoda/report/pdf.py               # EarningsReport → PDF (reportlab)
+    └── yoda/eval/                       # Model-as-judge eval harness
 ```
 
 ---
@@ -64,7 +72,7 @@ A **prompt-only baseline** (`yoda/modes/baseline.py`) makes a single `gpt-4o` ca
 
 ### Rubric
 
-Reports were scored by `claude-sonnet-4-6` (cross-family to prevent self-grading bias) on five dimensions, each rated 1–5:
+Reports were scored by `claude-sonnet-4-6` through `yoda/eval/judge.py` (cross-family to prevent self-grading bias). Judge outputs are cached under `data/eval/judge_cache/` so re-runs are free. Each report is scored on five dimensions, rated 1–5:
 
 | Dimension | What it measures |
 |---|---|
@@ -97,52 +105,60 @@ Mean scores across 3 tickers (higher is better; max 5):
 
 Full per-ticker results are in [`data/eval/results.csv`](data/eval/results.csv) and [`data/eval/summary.md`](data/eval/summary.md).
 
+The current production mode is `personality_panel` (Phase 10). It was introduced after the Agent / RAG-LLM / Baseline comparison above and has not been re-scored against that exact test set — a head-to-head reassessment is out of scope here.
+
 ---
 
 ## 4. Artifact Snapshot
 
 ### UI Flow
 
+The app has two tabs: **Single ticker** (interactive, one report at a time) and **Queue (batch)** (paste many tickers, generate overnight, download all PDFs as a ZIP).
+
 ```
 ┌─────────────────────────────────────────────────┐
-│  Yoda — pre-earnings research assistant          │
+│  Yoda — Pre-Earnings Research Assistant          │
+│  [ Single ticker ] [ Queue (batch) ]             │
 │                                                  │
-│  Ticker  [  NFLX         ]                       │
-│  Mode    ○ RAG-LLM (fast)                        │
-│          ● Agent-Reasoning (deep)                │
+│  Ticker  [  NFLX                  ]              │
+│  Mode    ● Fast (~40s)   ○ Deep (~90s)           │
 │                                                  │
 │  [  Generate Report  ]                           │
 └─────────────────────────────────────────────────┘
            ↓ (on click)
 ┌─────────────────────────────────────────────────┐
-│  ▼ Generating Agent-Reasoning report for NFLX   │
+│  ⏳ Generating Fast report for NFLX...           │
 │  ┌───────────────────────────────────────────┐  │
-│  │ Fetching NFLX filing from EDGAR...        │  │
-│  │ Chunking 847 sections...                  │  │
-│  │ Embedding 312 chunks...                   │  │
-│  │ [agent] iter 1: RETRIEVE_FROM_FILING(     │  │
-│  │   "revenue by segment Q1 2026")           │  │
-│  │ [agent] iter 2: RETRIEVE_FROM_FILING(     │  │
-│  │   "forward guidance operating margin")    │  │
-│  │ [agent] iter 3: FINISH                    │  │
+│  │ [panel:fast] Fetching filing for NFLX...  │  │
+│  │ [panel:fast] Filing: 10-Q 2026-04-18      │  │
+│  │ [panel:fast] Supplemental: 10-K 2026-...  │  │
+│  │ [panel:fast] Phase 2: 6 personalities...  │  │
+│  │ [Optimist] iter 1: retrieve_filing(...)   │  │
+│  │ [Pessimist] iter 1: search_news(...)      │  │
+│  │ [Quant]    iter 2: lookup_peer('DIS',...) │  │
+│  │ [panel:fast] Phase 4: synthesizing...     │  │
 │  └───────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────┘
            ↓ (complete)
 ┌─────────────────────────────────────────────────┐
-│  NFLX — Netflix, Inc.           10-Q 2026-04-18  │
-│                                                  │
-│  Key Metrics  Segments  Risks   Data Gaps        │
-│      8            4       6         2            │
+│  NFLX — Netflix, Inc.                            │
+│  10-Q filed 2026-04-18 · 10-K filed 2026-01-29   │
 │                                                  │
 │  [  Download PDF Report  ]                       │
 │                                                  │
-│  ▶ Bull / Bear / What to Watch                   │
-│  ▶ Data gaps (2)                                 │
-│  ▶ Reasoning trace (3 agent steps)               │
+│  Pre-Earnings Watchlist                          │
+│   **Ad-tier ARPU:** ...                          │
+│   -> Monitor ad-tier ARPU disclosure             │
+│   - https://reuters.com/...                      │
+│   - https://wsj.com/...                          │
+│                                                  │
+│  ▶ Bull Case / Bear Case                         │
+│  ▶ Recent News (8)                               │
+│  ▶ Data Gaps (2)                                 │
 └─────────────────────────────────────────────────┘
 ```
 
-### Sample Report Fields (NFLX, RAG-LLM mode)
+### Sample Report Fields (NFLX, personality_panel mode)
 
 ```json
 {
@@ -150,34 +166,38 @@ Full per-ticker results are in [`data/eval/results.csv`](data/eval/results.csv) 
   "company_name": "Netflix, Inc.",
   "filing_type": "10-Q",
   "filing_date": "2026-04-18",
+  "supplemental_filing_type": "10-K",
+  "supplemental_filing_date": "2026-01-29",
   "key_metrics": [
     {
       "name": "Total Revenue",
       "value": "$12,249,757K",
       "unit": "",
-      "source_citation": "Financial Statements chunk 57"
-    },
-    {
-      "name": "Operating Margin",
-      "value": "32.3",
-      "unit": "%",
-      "source_citation": "MD&A chunk 65"
+      "source_citation": "Financial Statements — Consolidated Statements of Operations"
     }
   ],
   "forward_guidance": {
     "text": "Management expects continued margin expansion driven by advertising tier growth...",
-    "source_citation": "MD&A chunk 72"
+    "source_citation": "MD&A — Outlook"
   },
+  "what_to_watch": [
+    {
+      "text": "**Ad-tier ARPU:** Advertising-tier ARPU grew 18% YoY against a backdrop of cooling subscriber adds. However, mix-shift toward lower-priced ad-supported plans could mask underlying pricing softness.\n\n-> Monitor ad-tier ARPU disclosure and ad-impression growth commentary.",
+      "relevant_urls": [
+        "https://www.reuters.com/business/media-telecom/netflix-ad-tier-growth-2026-04-18",
+        "https://www.wsj.com/articles/netflix-advertising-arpu-2026"
+      ]
+    }
+  ],
   "data_gaps": [
-    "EPS figures not cited — not present in provided filing sections",
-    "Paid net additions not extracted — subscriber table not in retrieved chunks"
+    "Paid net additions not disclosed — subscriber metric absent from MD&A this quarter"
   ]
 }
 ```
 
 ### PDF Output Structure
 
-The downloaded PDF contains: cover page (ticker, company, filing date), key metrics table, revenue segments table, forward guidance blockquote, key risks (new risks flagged in red), analyst consensus, recent news with hyperlinks, bull/bear/watch bullets, and data gaps in amber.
+The downloaded PDF contains: cover page (ticker, company name, primary filing date — and the supplemental 10-K date when both filings are within the 92-day window), the Pre-Earnings Watchlist (each entry followed by clickable "Sources:" URLs when the synthesizer found relevant news in the pool), key metrics table, revenue segments table, forward guidance blockquote, key risks (new risks flagged in red), analyst consensus, recent news with hyperlinks, bull/bear bullets, and data gaps in amber.
 
 ---
 
@@ -187,7 +207,7 @@ The downloaded PDF contains: cover page (ticker, company, filing date), key metr
 
 - Python 3.11+
 - Conda (recommended) or virtualenv
-- API keys for OpenAI, Anthropic, Finnhub, and Tavily (all have free tiers sufficient for testing)
+- API keys for OpenAI, Anthropic, Finnhub, FMP, and Tavily (all have free tiers sufficient for testing)
 
 ### Installation
 
@@ -213,6 +233,7 @@ Edit `.env` with your keys:
 OPENAI_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
 FINNHUB_API_KEY=...
+FMP_API_KEY=...
 TAVILY_API_KEY=tvly-...
 SEC_USER_AGENT="Your Name your@email.com"
 ```
@@ -223,9 +244,9 @@ SEC_USER_AGENT="Your Name your@email.com"
 streamlit run app.py
 ```
 
-Open [http://localhost:8501](http://localhost:8501), enter a ticker (e.g. `NFLX`), choose a mode, and click **Generate Report**.
+Open [http://localhost:8501](http://localhost:8501), enter a ticker (e.g. `NFLX`), pick **Fast** or **Deep**, and click **Generate Report**. For batch runs, switch to the **Queue (batch)** tab, paste multiple tickers (one per line or comma-separated), and run them sequentially — PDFs save to `data/reports/` as they complete and bundle into a downloadable ZIP at the end.
 
-The first run for a ticker fetches and indexes the SEC filing (~30s). Subsequent runs for the same ticker are fast because the filing and ChromaDB index are cached to disk.
+The first run for a ticker fetches and indexes the SEC filings — both the 10-Q (primary) and the 10-K (supplemental) when both are within the 92-day freshness window. Subsequent runs for the same ticker are fast because the filings and ChromaDB index are cached to disk.
 
 ### Run the Evaluation Harness
 
@@ -242,16 +263,16 @@ Outputs `data/eval/results.csv` and `data/eval/summary.md`. Judge results are ca
 ### Run Individual Mode Smoke Tests
 
 ```bash
-# Baseline (prompt-only, no RAG)
+# Multi-agent personality panel — current production mode
+python -m yoda.modes.personality_panel NFLX --fast
+python -m yoda.modes.personality_panel NFLX --deep
+
+# Legacy modes (kept as harnesses; not used by the Streamlit app)
 python -m yoda.modes.baseline
-
-# RAG-LLM mode
 python -m yoda.modes.rag_llm
-
-# Agent-Reasoning mode
 python -m yoda.modes.agent
 
-# PDF generation
+# PDF generation from a saved report JSON
 python -m yoda.report.pdf NFLX
 ```
 
@@ -263,7 +284,8 @@ python -m yoda.report.pdf NFLX
 |---|---|---|
 | `OPENAI_API_KEY` | Yes | LLM generation (`gpt-4o`) and cheap iterative steps (`gpt-4o-mini`) |
 | `ANTHROPIC_API_KEY` | Yes | Model-as-judge in the evaluation harness (`claude-sonnet-4-6`) |
-| `FINNHUB_API_KEY` | Yes | Analyst consensus estimates |
+| `FINNHUB_API_KEY` | Yes | Analyst consensus estimates (primary source) |
+| `FMP_API_KEY` | Yes | Financial Modeling Prep — backup source when Finnhub returns no consensus |
 | `TAVILY_API_KEY` | Yes | News and web search |
 | `SEC_USER_AGENT` | Yes | SEC EDGAR requires a contact string, e.g. `"Name email@example.com"` |
 
@@ -273,35 +295,41 @@ python -m yoda.report.pdf NFLX
 
 ```
 yoda/
-├── app.py                          # Streamlit entry point
+├── app.py                              # Streamlit entry point (Single ticker + Queue tabs)
 ├── requirements.txt
 ├── .env.example
 ├── yoda/
-│   ├── config.py                   # env vars, model names, constants
+│   ├── config.py                       # env vars, model names, constants
 │   ├── ingest/
-│   │   ├── edgar.py                # ticker -> SEC EDGAR fetch
-│   │   └── chunker.py              # section-aware chunking
+│   │   ├── edgar.py                    # ticker -> SEC EDGAR fetch (10-Q primary + 10-K supplemental)
+│   │   └── chunker.py                  # section-aware chunking
 │   ├── retrieval/
-│   │   ├── embeddings.py           # embedding wrapper
-│   │   └── vector_store.py         # ChromaDB wrapper
+│   │   ├── embeddings.py               # text-embedding-3-small wrapper
+│   │   └── vector_store.py             # ChromaDB wrapper (multi-accession)
 │   ├── tools/
-│   │   ├── consensus.py            # Finnhub + yfinance wrapper
-│   │   └── news.py                 # Tavily wrapper
+│   │   ├── consensus.py                # Finnhub + FMP backup
+│   │   └── news.py                     # Tavily wrapper
 │   ├── modes/
-│   │   ├── baseline.py             # prompt-only baseline
-│   │   ├── rag_llm.py              # Mode 1: RAG-LLM
-│   │   └── agent.py                # Mode 2: ReAct agent loop
-│   ├── schema.py                   # Pydantic report schema
+│   │   ├── personality_panel.py        # Phase 10: 6-personality panel (Fast/Deep)
+│   │   ├── tools.py                    # Tool registry (retrieve_filing, search_news, lookup_peer)
+│   │   ├── baseline.py                 # Prompt-only baseline (eval lower bound)
+│   │   ├── rag_llm.py                  # Legacy Mode 1 (kept as smoke test)
+│   │   └── agent.py                    # Legacy Mode 2 (kept as smoke test)
+│   ├── queue/
+│   │   └── processor.py                # Batch queue processor + ZIP bundler
+│   ├── schema.py                       # EarningsReport + WatchItem Pydantic models
 │   ├── report/
-│   │   └── pdf.py                  # EarningsReport -> PDF
+│   │   └── pdf.py                      # EarningsReport -> PDF (reportlab)
 │   └── eval/
-│       ├── rubric.py               # rubric Pydantic models
-│       ├── judge.py                # Anthropic model-as-judge
-│       └── runner.py               # batch eval over test tickers
+│       ├── rubric.py                   # rubric Pydantic models
+│       ├── judge.py                    # claude-sonnet-4-6 model-as-judge
+│       └── runner.py                   # batch eval over test tickers
 ├── data/
-│   ├── filings/                    # cached EDGAR downloads (gitignored)
-│   ├── chroma/                     # ChromaDB persistence (gitignored)
-│   └── eval/                       # eval outputs and judge cache
+│   ├── filings/{TICKER}/               # cached primary + supplemental HTML + latest.json (gitignored)
+│   ├── chroma/                         # ChromaDB persistence (gitignored)
+│   ├── reports/                        # PDFs written by the Queue processor (gitignored)
+│   └── eval/                           # eval outputs and judge cache
+├── .claude/worktrees/                  # working trees from /worktree development (gitignored)
 └── tests/
     └── test_smoke.py
 ```

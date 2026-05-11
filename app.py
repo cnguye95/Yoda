@@ -129,10 +129,10 @@ with tab_single:
     )
     ticker = ticker_raw.strip().upper()
 
-    # Mode toggle — Fast (~35-50s) vs Deep (~75-95s with cross-critique).
+    # Mode toggle — Fast (~40s) vs Deep (~90s).
     mode_label = st.radio(
         "Mode",
-        ["Fast (no debate, ~40s)", "Deep (with cross-critique, ~90s)"],
+        ["Fast (~40s)", "Deep (~90s)"],
         horizontal=True,
         key="single_mode_radio",
     )
@@ -168,7 +168,32 @@ with tab_single:
 
         st.divider()
         st.subheader(f"{report.ticker} — {report.company_name}")
-        st.caption(f"{report.filing_type} filed {report.filing_date}")
+
+        # Build the filing caption — show supplemental date when both are present.
+        filing_caption = f"{report.filing_type} filed {report.filing_date}"
+        if report.supplemental_filing_type:
+            filing_caption += f" · {report.supplemental_filing_type} filed {report.supplemental_filing_date}"
+        st.caption(filing_caption)
+
+        # Warn the user when a less-than-ideal filing source was used.
+        if report.filing_type == "N/A":
+            st.warning(
+                f"No SEC filing found within the last 92 days for {report.ticker}. "
+                "This report is based on recent news and peer filings only — "
+                "no fundamental filing data was available."
+            )
+        elif report.filing_type == "10-K":
+            # 10-K is the fallback; no recent 10-Q was available.
+            st.warning(
+                f"No recent 10-Q available for {report.ticker}. "
+                "Using the annual 10-K — report may not reflect the latest quarterly trends."
+            )
+        elif report.filing_type == "10-Q" and not report.supplemental_filing_type:
+            # 10-Q primary but no 10-K within 92 days to supplement.
+            st.warning(
+                f"No annual 10-K available within the last 92 days for {report.ticker}. "
+                "Report is based on the quarterly filing only."
+            )
 
         # PDF download button — generated once and cached.
         pdf_bytes = _ensure_pdf(report)
@@ -180,12 +205,16 @@ with tab_single:
         )
 
         # Pre-Earnings Watchlist — primary section, always visible.
-        # Each entry is two paragraphs (analysis + "-> Monitor ..." recommendation).
+        # Each entry is a WatchItem with two-paragraph text (analysis +
+        # "-> Monitor ..." recommendation) plus 0-3 relevant URLs.
         # st.markdown handles "\n\n" as a paragraph break and **bold** natively;
-        # we add an empty markdown call to space entries from each other.
+        # URLs render as a compact bullet sub-list so they read as starting
+        # points for further research, not part of the recommendation itself.
         st.subheader("Pre-Earnings Watchlist")
-        for point in report.what_to_watch:
-            st.markdown(_md(point))
+        for item in report.what_to_watch:
+            st.markdown(_md(item.text))
+            for u in item.relevant_urls:
+                st.markdown(f"- [{u}]({u})")
             st.markdown("")
 
         # Bull / Bear — secondary, in an expander.

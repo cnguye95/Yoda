@@ -671,8 +671,11 @@ Rules you must follow without exception:
    are given. Do NOT synthesize URLs. Do NOT shorten URLs. Do NOT omit URLs.
 
 3. what_to_watch is the PRIMARY output of this report. Produce at least 5
-   entries. Each entry is a single string composed of two parts separated
-   by a blank line (i.e., a literal "\n\n" inside the string):
+   entries. Each entry is a WatchItem object with two fields: `text` and
+   `relevant_urls`.
+
+   The `text` field is a single string composed of two parts separated by
+   a blank line (i.e., a literal "\n\n" inside the string):
 
    PART A — Analysis paragraph (2-4 sentences):
      - Begin with a bold topic heading followed by a colon, formatted with
@@ -691,18 +694,32 @@ Rules you must follow without exception:
        earnings print: a specific metric, disclosure, KPI, or commentary
        topic.
 
-   Worked example of a single what_to_watch entry (one Python string, with
-   a literal blank line between the two parts):
+   The `relevant_urls` field is a list of 0-3 URLs the analyst can use as
+   starting points for digging deeper on THIS specific entry:
+     - URLs MUST come from the NEWS POOL provided in the user message. Copy
+       them verbatim — do not shorten, modify, or invent URLs.
+     - Pick URLs whose headline or snippet directly speaks to the topic
+       of the entry. A URL about advertising belongs on an ad-tier item,
+       not on a capital-return item.
+     - Emit an empty list when the entry is purely filing-derived and no
+       news article in the pool supports it. An empty list is acceptable
+       and PREFERRED over a tangentially related URL.
 
-     **Capital Return Programs:** The company generated $X billion in
-     operating cash flow last quarter and has $Y billion of remaining
-     buyback authorization, supporting the current pace of returns.
-     However, total debt has risen from $A to $B over the past four
-     quarters, which pressures the sustainability of buybacks if free
-     cash flow softens.
+   Worked example of a single WatchItem (text shown with a literal blank
+   line between the two parts; relevant_urls drawn from the news pool):
 
-     -> Monitor operating cash flow, net debt change, and management
-     commentary on capital return priorities.
+     text:
+       **Capital Return Programs:** The company generated $X billion in
+       operating cash flow last quarter and has $Y billion of remaining
+       buyback authorization, supporting the current pace of returns.
+       However, total debt has risen from $A to $B over the past four
+       quarters, which pressures the sustainability of buybacks if free
+       cash flow softens.
+
+       -> Monitor operating cash flow, net debt change, and management
+       commentary on capital return priorities.
+     relevant_urls:
+       ["https://reuters.com/...", "https://wsj.com/..."]
 
    Do NOT use the words "Optimist", "Pessimist", "Conservative", "Dreamer",
    "Contrarian", "Quant", "the panel", "the analysts disagree", or any
@@ -822,22 +839,64 @@ def run_personality_panel(
     # ------------------------------------------------------------------
     print(f"{log_prefix} Fetching filing for {ticker}...")
     filing = fetch_latest_filing(ticker)
+
+    # Handle the case where no 10-K or 10-Q was filed within the freshness window.
+    if filing is None:
+        if not deep:
+            raise RuntimeError(
+                f"No 10-K or 10-Q filed in the last 92 days for {ticker}. "
+                "Fast mode requires a recent SEC filing. "
+                "Switch to Deep mode to generate a news-based report."
+            )
+        print(f"{log_prefix} [WARNING] No recent SEC filing found for {ticker}. "
+              "Deep mode will investigate using news and peer filings only.")
+        filing = {
+            "ticker":           ticker,
+            "filing_type":      "N/A",
+            "filing_date":      "N/A",
+            "url":              "",
+            "clean_text":       "",
+            "raw_html":         "",
+            "accession_number": f"{ticker}_no_filing",
+        }
+
     print(f"{log_prefix} Filing: {filing['filing_type']} {filing['filing_date']}")
 
-    chunks = chunk_filing(filing["clean_text"], filing["raw_html"])
-    print(f"{log_prefix} Chunked into {len(chunks)} chunks; embedding...")
-    chunk_texts = [c.text for c in chunks]
-    t0 = time.perf_counter()
-    embeddings = embed_texts(chunk_texts)
-    embed_tokens += sum(len(t) for t in chunk_texts) // 4
-    print(f"{log_prefix} Embedded {len(chunks)} chunks in {time.perf_counter()-t0:.2f}s")
+    # Extract supplemental filing before passing filing downstream.
+    # The supplemental key (if any) is a 10-K providing annual context alongside
+    # the primary 10-Q's fresh quarterly data.
+    supplemental = filing.pop("supplemental", None)
+    if supplemental:
+        print(f"{log_prefix} Supplemental: {supplemental['filing_type']} {supplemental['filing_date']}")
 
+    # Chunk and embed the filing only when a real filing was found.
+    # For news-only runs the ChromaStore stays empty; retrieve_filing returns [].
     store = ChromaStore()
-    store.upsert(filing["accession_number"], chunks, embeddings)
+    if filing["accession_number"] != f"{ticker}_no_filing":
+        chunks = chunk_filing(filing["clean_text"], filing["raw_html"])
+        print(f"{log_prefix} Chunked into {len(chunks)} chunks; embedding...")
+        chunk_texts = [c.text for c in chunks]
+        t0 = time.perf_counter()
+        embeddings = embed_texts(chunk_texts)
+        embed_tokens += sum(len(t) for t in chunk_texts) // 4
+        print(f"{log_prefix} Embedded {len(chunks)} chunks in {time.perf_counter()-t0:.2f}s")
+        store.upsert(filing["accession_number"], chunks, embeddings)
+
+    # Ingest the supplemental 10-K into the same store if present.
+    if supplemental:
+        sup_chunks = chunk_filing(supplemental["clean_text"], supplemental["raw_html"])
+        print(f"{log_prefix} Supplemental: {len(sup_chunks)} chunks; embedding...")
+        sup_texts = [c.text for c in sup_chunks]
+        t0 = time.perf_counter()
+        sup_embeddings = embed_texts(sup_texts)
+        embed_tokens += sum(len(t) for t in sup_texts) // 4
+        print(f"{log_prefix} Supplemental embedded in {time.perf_counter()-t0:.2f}s")
+        store.upsert(supplemental["accession_number"], sup_chunks, sup_embeddings)
 
     ctx = ToolContext(
         primary_ticker=ticker,
         primary_accession=filing["accession_number"],
+        supplemental_accession=supplemental["accession_number"] if supplemental else None,
         store=store,
     )
 
@@ -1001,10 +1060,27 @@ def run_personality_panel(
                 "Synthesis fabricated a URL — re-run."
             )
 
+    # Watchlist URL guard: strip any URLs not in the news pool rather than
+    # aborting the report. Watchlist URLs are supplementary starting points —
+    # an empty list is acceptable — so we degrade gracefully and log the
+    # offenders. (recent_news URLs remain a hard fail because they are core
+    # citations surfaced alongside headlines and must be real.)
+    for w in report.what_to_watch:
+        bad = [u for u in w.relevant_urls if u and u not in pool_urls]
+        if bad:
+            print(f"{log_prefix} WARNING: stripped {len(bad)} fabricated "
+                  f"watchlist URL(s): {bad}")
+            w.relevant_urls = [u for u in w.relevant_urls if u in pool_urls]
+
     # Make sure hypotheses_explored echoes the final list. If the LLM dropped
     # the field, fill it in ourselves — the analyst needs this for transparency.
     if not report.hypotheses_explored:
         report.hypotheses_explored = final_hypotheses
+
+    # Attach supplemental filing metadata directly — not via LLM, just stamped on.
+    if supplemental:
+        report.supplemental_filing_type = supplemental["filing_type"]
+        report.supplemental_filing_date = supplemental["filing_date"]
 
     # ------------------------------------------------------------------
     # Cost + wall-time totals (regex-parseable by the eval runner)

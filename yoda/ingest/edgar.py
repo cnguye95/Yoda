@@ -48,8 +48,9 @@ _INDEX_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{acc_nodashes}/{acc}
 # Base URL for downloading actual filing documents from the EDGAR archive.
 _ARCHIVES_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{acc_nodashes}/{doc}"
 
-# If the most recent 10-Q is older than this many days, fall back to 10-K.
-_TEN_Q_FRESHNESS_DAYS = 180
+# Window in which a filing must have been filed to be considered "recent".
+# Applies to both 10-Q (preferred) and 10-K (fallback/supplemental).
+_FILING_FRESHNESS_DAYS = 92
 
 # ---------------------------------------------------------------------------
 # Module-level cache for the ticker→CIK mapping so we only fetch it once
@@ -112,32 +113,50 @@ def _get_filings_metadata(cik: int) -> list[dict]:
     return filings
 
 
-def _pick_latest_filing(filings: list[dict], today: date) -> dict:
-    # Choose the most recent 10-Q filed within the freshness window.
-    # If none qualifies, fall back to the most recent 10-K.
-    # Raise RuntimeError loudly if neither exists — don't silently return None.
-    cutoff = today - timedelta(days=_TEN_Q_FRESHNESS_DAYS)
+def _pick_latest_filing(filings: list[dict]) -> dict | None:
+    # Prefer the most recent 10-Q filed within the freshness window.
+    # A 10-Q has the freshest quarterly data — critical for pre-earnings analysis.
+    # Fall back to the most recent 10-K if no recent 10-Q exists.
+    # Returns None if neither qualifies — callers handle the no-filing case.
+    cutoff = date.today() - timedelta(days=_FILING_FRESHNESS_DAYS)
 
     best_10q = None
     best_10k = None
 
     for f in filings:
         filed = date.fromisoformat(f["filing_date"])
-        if f["form"] == "10-Q" and filed >= cutoff:
+        if filed < cutoff:
+            continue
+        if f["form"] == "10-Q":
             if best_10q is None or filed > date.fromisoformat(best_10q["filing_date"]):
                 best_10q = f
-        if f["form"] == "10-K":
+        elif f["form"] == "10-K":
             if best_10k is None or filed > date.fromisoformat(best_10k["filing_date"]):
                 best_10k = f
 
     if best_10q is not None:
         return best_10q
-    if best_10k is not None:
-        return best_10k
-    raise RuntimeError(
-        "No 10-Q (within 6 months) or 10-K found for this ticker. "
-        "The company may not be an SEC filer, or EDGAR has no recent filings."
-    )
+    return best_10k   # None if nothing qualifies
+
+
+def _pick_supplemental_filing(filings: list[dict], primary: dict) -> dict | None:
+    # Only supplement a 10-Q primary with the most recent 10-K within the window.
+    # The 10-K provides annual narrative and risk context alongside the 10-Q's
+    # fresh quarterly numbers. When primary is already a 10-K, there is no useful
+    # supplemental — the preferred 10-Q was absent, so an older 10-Q adds little.
+    if primary["form"] != "10-Q":
+        return None
+    cutoff = date.today() - timedelta(days=_FILING_FRESHNESS_DAYS)
+    best = None
+    for f in filings:
+        if f["form"] != "10-K":
+            continue
+        filed = date.fromisoformat(f["filing_date"])
+        if filed < cutoff:
+            continue
+        if best is None or filed > date.fromisoformat(best["filing_date"]):
+            best = f
+    return best
 
 
 def _get_primary_document(cik: int, accession_number: str) -> str:
@@ -229,10 +248,35 @@ def _read_disk_cache(ticker: str) -> dict | None:
         return None
 
     meta["raw_html"] = html_path.read_text(encoding="utf-8")
+
+    # Load supplemental filing (10-K) if it was cached alongside the primary.
+    # Pop the supplemental fields from meta so they don't pollute the primary dict.
+    sup_acc  = meta.pop("supplemental_accession_number", None)
+    sup_type = meta.pop("supplemental_filing_type", None)
+    sup_date = meta.pop("supplemental_filing_date", None)
+    sup_url  = meta.pop("supplemental_url", None)
+    if sup_acc:
+        sup_html_path = _CACHE_DIR / ticker / f"{sup_acc}.html"
+        if sup_html_path.exists():
+            meta["supplemental"] = {
+                "ticker":           ticker,
+                "filing_type":      sup_type,
+                "filing_date":      sup_date,
+                "accession_number": sup_acc,
+                "url":              sup_url or "",
+                "raw_html":         sup_html_path.read_text(encoding="utf-8"),
+            }
+
     return meta
 
 
-def _write_disk_cache(ticker: str, meta: dict, raw_html: str) -> None:
+def _write_disk_cache(
+    ticker: str,
+    meta: dict,
+    raw_html: str,
+    supplemental_meta: dict | None = None,
+    supplemental_raw_html: str | None = None,
+) -> None:
     # Write the raw HTML and a small JSON metadata file to disk so future
     # calls can skip network round-trips entirely.
     cache_dir = _CACHE_DIR / ticker
@@ -242,7 +286,17 @@ def _write_disk_cache(ticker: str, meta: dict, raw_html: str) -> None:
     (cache_dir / f"{acc}.html").write_text(raw_html, encoding="utf-8")
 
     # Only persist the lightweight fields, not raw_html itself (stored separately).
-    saveable = {k: v for k, v in meta.items() if k != "raw_html"}
+    saveable = {k: v for k, v in meta.items() if k not in ("raw_html", "clean_text")}
+
+    # Store supplemental filing alongside the primary if one was fetched.
+    if supplemental_meta and supplemental_raw_html:
+        sup_acc = supplemental_meta["accession_number"]
+        (cache_dir / f"{sup_acc}.html").write_text(supplemental_raw_html, encoding="utf-8")
+        saveable["supplemental_accession_number"] = sup_acc
+        saveable["supplemental_filing_type"]       = supplemental_meta["filing_type"]
+        saveable["supplemental_filing_date"]       = supplemental_meta["filing_date"]
+        saveable["supplemental_url"]               = supplemental_meta.get("url", "")
+
     (cache_dir / "latest.json").write_text(json.dumps(saveable), encoding="utf-8")
 
 
@@ -272,6 +326,9 @@ def fetch_latest_filing(ticker: str, force_refresh: bool = False) -> dict:
         cached = _read_disk_cache(ticker)
         if cached:
             cached["clean_text"] = _clean_html(cached["raw_html"])
+            # Also clean the supplemental filing text if it was cached.
+            if "supplemental" in cached:
+                cached["supplemental"]["clean_text"] = _clean_html(cached["supplemental"]["raw_html"])
             return cached
 
     # Step 1: resolve ticker to CIK using the SEC's public mapping file.
@@ -285,11 +342,16 @@ def fetch_latest_filing(ticker: str, force_refresh: bool = False) -> dict:
 
     # Step 2: get the company's filing history and pick the right filing.
     filings = _get_filings_metadata(cik)
-    chosen = _pick_latest_filing(filings, date.today())
+    chosen = _pick_latest_filing(filings)
+    if chosen is None:
+        return None   # No 10-K or 10-Q within the freshness window.
 
     accession_number = chosen["accession_number"]
     filing_type      = chosen["form"]
     filing_date      = chosen["filing_date"]
+
+    # Step 2b: look for a supplemental 10-K when primary is a 10-Q.
+    supplemental_chosen = _pick_supplemental_filing(filings, chosen)
 
     # Step 3: find the primary document filename from the filing index page.
     primary_doc = _get_primary_document(cik, accession_number)
@@ -297,7 +359,29 @@ def fetch_latest_filing(ticker: str, force_refresh: bool = False) -> dict:
     # Step 4: download the primary document from the EDGAR archive.
     raw_html, url = _download_filing_html(cik, accession_number, primary_doc)
 
-    # Step 5: persist to disk so the next call is fully cache-served.
+    # Step 4b: fetch the supplemental filing if one was found.
+    supplemental = None
+    if supplemental_chosen:
+        sup_acc  = supplemental_chosen["accession_number"]
+        sup_type = supplemental_chosen["form"]
+        sup_date = supplemental_chosen["filing_date"]
+        try:
+            sup_doc             = _get_primary_document(cik, sup_acc)
+            sup_raw_html, sup_url = _download_filing_html(cik, sup_acc, sup_doc)
+            supplemental = {
+                "ticker":           ticker,
+                "filing_type":      sup_type,
+                "filing_date":      sup_date,
+                "accession_number": sup_acc,
+                "url":              sup_url,
+                "raw_html":         sup_raw_html,
+                "clean_text":       _clean_html(sup_raw_html),
+            }
+        except Exception as exc:
+            # Don't fail the whole request if the supplemental can't be fetched.
+            print(f"[edgar] WARNING: could not fetch supplemental {sup_type} ({sup_date}): {exc}")
+
+    # Step 5: persist primary (and supplemental if fetched) to disk.
     meta = {
         "ticker":           ticker,
         "cik":              cik,
@@ -306,12 +390,23 @@ def fetch_latest_filing(ticker: str, force_refresh: bool = False) -> dict:
         "accession_number": accession_number,
         "url":              url,
     }
-    _write_disk_cache(ticker, meta, raw_html)
+    sup_meta_for_cache = (
+        {k: v for k, v in supplemental.items() if k not in ("raw_html", "clean_text")}
+        if supplemental else None
+    )
+    _write_disk_cache(
+        ticker, meta, raw_html,
+        supplemental_meta=sup_meta_for_cache,
+        supplemental_raw_html=supplemental["raw_html"] if supplemental else None,
+    )
 
     # Step 6: clean the HTML to plain text for the Phase 2 chunker.
     clean_text = _clean_html(raw_html)
 
-    return {**meta, "raw_html": raw_html, "clean_text": clean_text}
+    result = {**meta, "raw_html": raw_html, "clean_text": clean_text}
+    if supplemental:
+        result["supplemental"] = supplemental
+    return result
 
 
 # ---------------------------------------------------------------------------

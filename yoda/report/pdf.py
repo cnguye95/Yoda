@@ -108,16 +108,16 @@ def _cover_elements(report: EarningsReport, styles):
     elements.append(company_para)
     elements.append(Spacer(1, 0.3*inch))
 
-    # Filing info
-    filing_para = Paragraph(
-        f"<b>{report.filing_type}</b> filed {report.filing_date}",
-        styles['Normal']
-    )
-    elements.append(filing_para)
+    # Filing info — show supplemental date when both 10-Q and 10-K were used.
+    filing_line = f"<b>{report.filing_type}</b> filed {report.filing_date}"
+    if report.supplemental_filing_type:
+        filing_line += f" &middot; <b>{report.supplemental_filing_type}</b> filed {report.supplemental_filing_date}"
+    elements.append(Paragraph(filing_line, styles['Normal']))
 
-    # Generated timestamp (small gray)
+    # Generated timestamp — format as "YYYY-MM-DD HH:MM" (drop timezone and subseconds)
+    generated_dt = datetime.fromisoformat(report.report_generated_at).strftime("%Y-%m-%d %H:%M")
     generated_para = Paragraph(
-        f"<i>Report generated: {report.report_generated_at}</i>",
+        f"<i>Report generated: {generated_dt}</i>",
         styles['Normal']
     )
     generated_para.textColor = colors.HexColor('#999999')
@@ -317,17 +317,25 @@ def _what_to_watch_section(report: EarningsReport, styles):
     elements.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#003366')))
     elements.append(Spacer(1, 0.1*inch))
 
-    # Each entry has two parts (analysis + recommendation) separated by a blank
-    # line. Split on "\n\n", render each part as its own Paragraph, and convert
-    # markdown **bold** to ReportLab <b> tags so the topic heading shows in bold.
-    for point in report.what_to_watch:
-        parts = [p.strip() for p in point.split("\n\n") if p.strip()]
+    # Each WatchItem has a text field (analysis + recommendation, separated by
+    # a blank line) and a list of 0-3 relevant_urls. Split the text on "\n\n",
+    # render each part as its own Paragraph, and convert markdown **bold** to
+    # ReportLab <b> tags so the topic heading shows in bold. Render URLs (if any)
+    # as a "Sources:" sub-paragraph with clickable links, matching how news URLs
+    # are rendered elsewhere in the PDF.
+    for item in report.what_to_watch:
+        parts = [p.strip() for p in item.text.split("\n\n") if p.strip()]
         for idx, part in enumerate(parts):
             # Convert one pair of ** markers into <b>...</b> for ReportLab.
             rendered = part.replace("**", "<b>", 1).replace("**", "</b>", 1)
             elements.append(Paragraph(rendered, styles['BodyText']))
             if idx < len(parts) - 1:
                 elements.append(Spacer(1, 0.06*inch))   # gap inside an entry
+        # Sources sub-paragraph — only when this entry has URLs to surface.
+        if item.relevant_urls:
+            url_links = "<br/>".join(f'<a href="{u}">{u}</a>' for u in item.relevant_urls)
+            elements.append(Spacer(1, 0.04*inch))
+            elements.append(Paragraph(f"<i>Sources:</i><br/>{url_links}", styles['Citation']))
         elements.append(Spacer(1, 0.18*inch))           # gap between entries
 
     if not report.what_to_watch:

@@ -40,9 +40,11 @@ class ToolContext:
         primary_ticker: str,
         primary_accession: str,
         store: ChromaStore,
+        supplemental_accession: str | None = None,
     ) -> None:
         self.primary_ticker = primary_ticker
         self.primary_accession = primary_accession
+        self.supplemental_accession = supplemental_accession  # 10-K when primary is 10-Q
         self.store = store
 
         # Tracks which peer tickers have already been ingested into the store
@@ -66,13 +68,16 @@ class ToolContext:
 def retrieve_filing(ctx: ToolContext, query: str, k: int = 5) -> list[Chunk]:
     """Semantic search over the primary ticker's filing chunks.
 
-    Thin wrapper around ChromaStore.query — exists so the agent surface is
-    decoupled from the storage layer (we could swap Chroma later without
-    changing the tool contract).
+    Queries both the primary filing (10-Q) and the supplemental filing (10-K)
+    when both are available, returning up to 2k chunks so personalities see
+    the freshest quarterly data alongside annual context.
     """
     # ChromaStore.query is safe to call concurrently from multiple personality
     # threads since reads don't mutate the on-disk index.
-    return ctx.store.query(ctx.primary_accession, query, k=k)
+    chunks = ctx.store.query(ctx.primary_accession, query, k=k)
+    if ctx.supplemental_accession:
+        chunks += ctx.store.query(ctx.supplemental_accession, query, k=k)
+    return chunks
 
 
 # ---------------------------------------------------------------------------
