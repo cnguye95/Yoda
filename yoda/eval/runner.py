@@ -26,7 +26,7 @@ import time
 
 import pandas as pd
 
-from yoda.eval.judge import judge_report
+from yoda.eval.judge import cache_key_for, judge_report, prune_judge_cache, write_run_manifest
 from yoda.eval.rubric import JudgeScores
 from yoda.ingest.chunker import chunk_filing
 from yoda.ingest.edgar import fetch_latest_filing
@@ -35,14 +35,20 @@ from yoda.modes.personality_panel import run_personality_panel
 from yoda.schema import EarningsReport
 
 
-# Curated universe of 50 major US-listed stocks (public >3 years).
-# Used as default evaluation scope for standardized comparisons.
+# Curated 10-ticker universe covering 9 distinct sectors.
+# Chosen for variety over breadth: one representative per sector/archetype
+# so evaluation captures diverse filing structures and business narratives.
 CURATED_TICKERS = [
-    "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK.B", "JNJ", "V",
-    "WMT", "JPM", "PG", "MA", "DIS", "BA", "ADBE", "CRM", "NKE", "MCD",
-    "KO", "PEP", "ABT", "ABBV", "XOM", "MRK", "NVO", "CVX", "ACN", "AMD",
-    "HON", "ETN", "INTU", "CSCO", "CAT", "QCOM", "INTC", "IBM", "AVGO", "NEE",
-    "LMT", "GILD", "TMUS", "MDLZ", "PYPL", "TJX", "COST", "ADP", "NFLX", "PANW",
+    "AAPL",   # Tech — hardware + services
+    "NVDA",   # Tech — semiconductors / AI
+    "AMZN",   # Tech — cloud + e-commerce
+    "JPM",    # Financials — banking
+    "JNJ",    # Healthcare — pharma + medtech
+    "XOM",    # Energy
+    "KO",     # Consumer Staples
+    "NFLX",   # Media / Streaming
+    "CAT",    # Industrials
+    "PANW",   # Cybersecurity / SaaS
 ]
 
 
@@ -100,14 +106,18 @@ def _capture(fn, *args) -> tuple[EarningsReport, float, float, str]:
     return report, latency, cost, log
 
 
-def _capture_panel(ticker: str) -> tuple[EarningsReport, float, float, str]:
+def _capture_panel(
+    ticker: str, embedding_provider: str = "openai"
+) -> tuple[EarningsReport, float, float, str]:
     # Variant of _capture for run_personality_panel which returns
     # (report, personality_results, critique_messages). Extracts the report
     # and discards the trace details (the eval rubric scores the report).
     buf = io.StringIO()
     t0 = time.perf_counter()
     with contextlib.redirect_stdout(buf):
-        report, _personality_results, _critique = run_personality_panel(ticker)
+        report, _personality_results, _critique = run_personality_panel(
+            ticker, embedding_provider=embedding_provider
+        )
     elapsed = time.perf_counter() - t0
     log = buf.getvalue()
 
@@ -130,8 +140,10 @@ def _run_mode(
     if mode == "baseline":
         excerpt = _build_baseline_excerpt(filing)
         return _capture(run_baseline, ticker, excerpt)
-    elif mode == "panel_deep":
-        return _capture_panel(ticker)
+    elif mode == "yoda_openai":
+        return _capture_panel(ticker, embedding_provider="openai")
+    elif mode == "yoda_qwen":
+        return _capture_panel(ticker, embedding_provider="qwen")
     else:
         raise ValueError(f"Unknown mode: {mode}")
 
@@ -157,7 +169,7 @@ def _scores_to_dict(scores: JudgeScores) -> dict:
 
 def run_eval(
     tickers: list[str],
-    modes: list[str] = ("baseline", "panel_deep"),
+    modes: list[str] = ("baseline", "yoda_openai", "yoda_qwen"),
 ) -> pd.DataFrame:
     """Run each (ticker, mode) pair, judge it, return a long-format DataFrame.
 
@@ -176,6 +188,8 @@ def run_eval(
     results_path.unlink(missing_ok=True)
 
     rows = []
+    # Keys of every judge_report() call this run; written to a manifest at the end.
+    run_cache_keys: set[str] = set()
 
     for ticker in tickers:
         ticker = ticker.upper()
@@ -194,8 +208,14 @@ def run_eval(
                 print(f"  ERROR in mode={mode}: {exc}")
                 continue
 
+            # Save report JSON — overwrites previous run, keeping 1 per (mode, ticker).
+            (out_dir / f"{mode}_{ticker}.json").write_text(
+                report.model_dump_json(indent=2), encoding="utf-8"
+            )
+
             # Judge the report against the filing text.
             scores = judge_report(report, filing_text)
+            run_cache_keys.add(cache_key_for(report))
 
             row = {
                 "ticker": ticker,
@@ -226,6 +246,16 @@ def run_eval(
     chart_path = out_dir / "comparison.png"
     _write_chart(df, chart_path)
     print(f"Chart saved to {chart_path}")
+
+    # Write a manifest for this run and prune cache to the last 2 runs.
+    write_run_manifest(run_cache_keys)
+    prune_judge_cache(keep_runs=2)
+
+    # Delete report JSONs from modes not in this run (e.g. rag_llm, agent, panel_fast).
+    active_prefixes = tuple(f"{m}_" for m in modes)
+    for f in out_dir.glob("*.json"):
+        if not any(f.name.startswith(p) for p in active_prefixes):
+            f.unlink()
 
     return df
 
@@ -274,13 +304,17 @@ def _write_summary(df: pd.DataFrame, path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Comparison chart — grouped bar chart, baseline vs panel_deep across 5 metrics
+# Comparison chart — grouped bar chart, baseline vs Yoda variants across 5 metrics
 # ---------------------------------------------------------------------------
 
 # Display-name mapping for the chart legend / title. Keep the underlying
 # mode keys intact in the DataFrame / CSV / summary.md — only the chart
-# rebrands `panel_deep` as `Yoda` for slide presentation.
-_MODE_DISPLAY = {"panel_deep": "Yoda", "baseline": "Baseline"}
+# rebrands the modes for slide presentation.
+_MODE_DISPLAY = {
+    "baseline":    "Baseline",
+    "yoda_openai": "Yoda (OpenAI)",
+    "yoda_qwen":   "Yoda (Qwen)",
+}
 
 
 def _display(mode: str) -> str:
@@ -313,7 +347,7 @@ def _write_chart(df: pd.DataFrame, path) -> None:
 
     # Labels, title, axis limits, and grid.
     ax.set_ylabel("Mean Score (1-5)")
-    ax.set_title("Baseline vs Yoda — Mean Rubric Scores")
+    ax.set_title("Baseline vs Yoda (OpenAI) vs Yoda (Qwen) — Mean Rubric Scores")
     ax.set_xticks(x)
     ax.set_xticklabels([m.replace("_", "\n") for m in metrics], fontsize=9)
     ax.set_ylim(0, 5)

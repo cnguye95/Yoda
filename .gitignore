@@ -11,3 +11,5 @@ data/eval/judge_cache/
 data/reports/
 data/queue_zips/
 .claude/
+PLAN.md
+CLAUDE.md

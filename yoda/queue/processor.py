@@ -30,12 +30,31 @@ _ZIPS_DIR    = pathlib.Path("data/queue_zips")
 
 
 # ---------------------------------------------------------------------------
+# Cleanup helpers
+# ---------------------------------------------------------------------------
+
+def _prune_reports(ticker: str) -> None:
+    # Delete all but the most recent PDF for this ticker in data/reports/.
+    pdfs = sorted(_REPORTS_DIR.glob(f"{ticker}_*.pdf"))  # ascending = oldest first
+    for old in pdfs[:-1]:
+        old.unlink()
+
+
+def _prune_zips(keep: int = 2) -> None:
+    # Delete all but the most recent `keep` ZIPs in data/queue_zips/.
+    zips = sorted(_ZIPS_DIR.glob("yoda_queue_*.zip"))  # ascending = oldest first
+    for old in zips[:-keep]:
+        old.unlink()
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
 def process_queue(
     tickers: list[str],
     on_progress: Callable[[str, str], None] | None = None,
+    embedding_provider: str = "openai",
 ) -> tuple[pathlib.Path, list[dict]]:
     """Run the personality panel sequentially for each ticker.
 
@@ -87,7 +106,9 @@ def process_queue(
         started = time.perf_counter()
         try:
             # Run the panel — the actual heavy lifting.
-            report, _personality_results, _critique = run_personality_panel(ticker)
+            report, _personality_results, _critique = run_personality_panel(
+                ticker, embedding_provider=embedding_provider
+            )
 
             # Fetch the filing once more so we can pass the URL to the PDF
             # for inline citation hyperlinks. fetch_latest_filing is cached
@@ -100,6 +121,7 @@ def process_queue(
             pdf_path = _REPORTS_DIR / f"{ticker}_{ts}.pdf"
             report_to_pdf(report, str(pdf_path), filing_url=filing["url"])
             pdf_paths.append(pdf_path)
+            _prune_reports(ticker)
 
             elapsed = time.perf_counter() - started
             results.append({
@@ -142,6 +164,7 @@ def process_queue(
             # files in their current directory, not nested under data/reports/.
             zf.write(pdf, arcname=pdf.name)
 
+    _prune_zips()
     return zip_path, results
 
 

@@ -13,6 +13,7 @@ same-model bias, which would make the baseline look better than it is.
 Smoke test: python -m yoda.eval.judge
 """
 
+import datetime
 import hashlib
 import json
 import pathlib
@@ -166,6 +167,46 @@ def judge_report(report: EarningsReport, filing_text: str) -> JudgeScores:
     print(f"  [judge] cached to {cache_file}")
 
     return scores
+
+
+# ---------------------------------------------------------------------------
+# Cache management helpers — used by runner.py at the end of each eval run
+# ---------------------------------------------------------------------------
+
+def cache_key_for(report: EarningsReport) -> str:
+    # Return the cache key for a report without calling the judge API.
+    return hashlib.sha256(report.model_dump_json().encode()).hexdigest()[:16]
+
+
+def write_run_manifest(cache_keys: set[str]) -> None:
+    # Write a manifest file listing every cache key used in this eval run.
+    # Manifest files are named by timestamp so they sort chronologically.
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    manifest = _CACHE_DIR / f"run_{ts}.manifest"
+    manifest.write_text("\n".join(sorted(cache_keys)), encoding="utf-8")
+    print(f"  [judge] wrote manifest {manifest.name} ({len(cache_keys)} entries)")
+
+
+def prune_judge_cache(keep_runs: int = 2) -> None:
+    # Delete .json cache files and old manifests not covered by the most recent runs.
+    manifests = sorted(_CACHE_DIR.glob("run_*.manifest"))  # oldest first
+    to_keep   = manifests[-keep_runs:]
+    to_delete = manifests[:-keep_runs]
+
+    # Collect all keys still referenced by the manifests we're keeping.
+    keep_keys: set[str] = set()
+    for m in to_keep:
+        keep_keys.update(m.read_text(encoding="utf-8").split())
+
+    # Delete stale .json files. unlink() returns None (falsy) so "not f.unlink()"
+    # is True after deletion, letting us count without a separate counter variable.
+    deleted = sum(1 for f in _CACHE_DIR.glob("*.json")
+                  if f.stem not in keep_keys and not f.unlink())
+    for m in to_delete:
+        m.unlink()
+
+    print(f"  [judge] pruned {deleted} stale cache files, kept {len(to_keep)} runs")
 
 
 # ---------------------------------------------------------------------------

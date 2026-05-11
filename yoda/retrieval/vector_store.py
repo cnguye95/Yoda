@@ -1,9 +1,14 @@
 """ChromaDB wrapper for storing and querying SEC filing chunks by embedding.
 
-ChromaStore holds a persistent Chroma collection called "filings" where every
-chunk from every processed filing is stored. Documents are keyed by
-"{accession_number}_{chunk_index}" so upserting the same filing twice is
-idempotent — the second call overwrites the first.
+ChromaStore holds a persistent Chroma collection where every chunk from every
+processed filing is stored. There is one collection per embedding provider so
+the 1536-dim OpenAI vectors and the 1024-dim Qwen vectors never collide:
+
+  - provider="openai" -> "filings_openai" (1536-dim)
+  - provider="qwen"   -> "filings_qwen"   (1024-dim)
+
+Documents are keyed by "{accession_number}_{chunk_index}" so upserting the
+same filing twice is idempotent — the second call overwrites the first.
 
 Critical correctness invariant: every query filters by accession_number via
 Chroma's `where=` clause. Without this filter, a query for one company's
@@ -20,6 +25,17 @@ from yoda.retrieval.embeddings import embed_texts
 
 
 # ---------------------------------------------------------------------------
+# Per-provider Chroma collection names
+# ---------------------------------------------------------------------------
+
+# Each provider gets its own collection because the vector dimensions differ.
+_COLLECTION_NAMES = {
+    "openai": "filings_openai",
+    "qwen":   "filings_qwen",
+}
+
+
+# ---------------------------------------------------------------------------
 # ChromaStore class
 # ---------------------------------------------------------------------------
 
@@ -31,16 +47,19 @@ class ChromaStore:
     a class avoids reopening the on-disk database on every call.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, provider: str = "openai") -> None:
+        # Remember the provider so query() can embed the query text with
+        # the same backend that the stored vectors were created with.
+        self._provider = provider
+
         # Open (or create) the persistent Chroma database at data/chroma/.
         # Chroma creates the directory if it doesn't exist.
         self._client = chromadb.PersistentClient(path="data/chroma")
 
-        # Get or create the "filings" collection. We use cosine distance
-        # because our embeddings are high-dimensional unit vectors — cosine
-        # similarity is the standard metric for this embedding model.
+        # Get or create the per-provider collection. Cosine distance is the
+        # standard metric for unit-vector embeddings from both providers.
         self._collection = self._client.get_or_create_collection(
-            name="filings",
+            name=_COLLECTION_NAMES[provider],
             metadata={"hnsw:space": "cosine"},
         )
 
@@ -118,8 +137,9 @@ class ChromaStore:
         k : int
             Number of results to return (default 5).
         """
-        # Embed the query text so we can compare it against stored vectors.
-        query_vector = embed_texts([query_text])[0]
+        # Embed the query text with the same backend used at upsert time so
+        # the vectors live in the same space.
+        query_vector = embed_texts([query_text], provider=self._provider)[0]
 
         # Query Chroma with the where= filter locked to this accession.
         # Without the filter, results from other filings could appear.
