@@ -35,7 +35,6 @@ _ZIPS_DIR    = pathlib.Path("data/queue_zips")
 
 def process_queue(
     tickers: list[str],
-    deep: bool,
     on_progress: Callable[[str, str], None] | None = None,
 ) -> tuple[pathlib.Path, list[dict]]:
     """Run the personality panel sequentially for each ticker.
@@ -48,9 +47,6 @@ def process_queue(
     ----------
     tickers : list[str]
         Ticker symbols to process. Upper-cased and stripped per-ticker.
-    deep : bool
-        True to use Deep mode (~75-95s, ~$0.45-0.55), False for Fast
-        (~35-50s, ~$0.15-0.25).
     on_progress : optional callback
         Called with (ticker, status) where status is one of:
           "running"    — about to invoke the panel
@@ -91,9 +87,7 @@ def process_queue(
         started = time.perf_counter()
         try:
             # Run the panel — the actual heavy lifting.
-            report, _personality_results, _critique = run_personality_panel(
-                ticker, deep=deep,
-            )
+            report, _personality_results, _critique = run_personality_panel(ticker)
 
             # Fetch the filing once more so we can pass the URL to the PDF
             # for inline citation hyperlinks. fetch_latest_filing is cached
@@ -165,8 +159,8 @@ if __name__ == "__main__":
         # Simple stdout callback — the Streamlit UI wires up its own version.
         print(f"  [queue] {ticker}: {status}")
 
-    print(f"Processing queue: {cli_tickers} (Fast mode for smoke test)\n")
-    zp, res = process_queue(cli_tickers, deep=False, on_progress=_print_progress)
+    print(f"Processing queue: {cli_tickers}\n")
+    zp, res = process_queue(cli_tickers, on_progress=_print_progress)
 
     print(f"\nZIP created at: {zp}")
     print("Results:")

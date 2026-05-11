@@ -118,8 +118,6 @@ def _run_mode(
     if mode == "baseline":
         excerpt = _build_baseline_excerpt(filing)
         return _capture(run_baseline, ticker, excerpt)
-    elif mode == "panel_fast":
-        return _capture_panel(ticker, deep=False)
     elif mode == "panel_deep":
         return _capture_panel(ticker, deep=True)
     else:
@@ -147,7 +145,7 @@ def _scores_to_dict(scores: JudgeScores) -> dict:
 
 def run_eval(
     tickers: list[str],
-    modes: list[str] = ("baseline", "panel_fast", "panel_deep"),
+    modes: list[str] = ("baseline", "panel_deep"),
 ) -> pd.DataFrame:
     """Run each (ticker, mode) pair, judge it, return a long-format DataFrame.
 

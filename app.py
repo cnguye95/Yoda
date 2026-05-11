@@ -1,6 +1,6 @@
 """Streamlit entry point for Yoda. Run with: `streamlit run app.py`.
 
-Two tabs: Single ticker (generate one report with Fast/Deep toggle) and Queue
+Two tabs: Single ticker (generate one report) and Queue
 (batch multiple tickers overnight, download all PDFs as a ZIP).
 """
 
@@ -129,15 +129,6 @@ with tab_single:
     )
     ticker = ticker_raw.strip().upper()
 
-    # Mode toggle — Fast (~40s) vs Deep (~90s).
-    mode_label = st.radio(
-        "Mode",
-        ["Fast (~40s)", "Deep (~90s)"],
-        horizontal=True,
-        key="single_mode_radio",
-    )
-    deep = mode_label.startswith("Deep")
-
     # Generate button is disabled until the user enters a ticker.
     generate_clicked = st.button(
         "Generate Report",
@@ -149,8 +140,8 @@ with tab_single:
     # Generation handler — runs when the button is clicked.
     if generate_clicked:
         try:
-            with st.spinner(f"Generating {mode_label} report for {ticker}..."):
-                report, _, _ = run_personality_panel(ticker, deep=deep)
+            with st.spinner(f"Generating report for {ticker}..."):
+                report, _, _ = run_personality_panel(ticker)
 
             # Persist report in session state so it survives reruns.
             st.session_state["report"] = report
@@ -265,14 +256,6 @@ with tab_queue:
         )
 
     with col_actions:
-        queue_mode = st.radio(
-            "Mode",
-            ["Fast", "Deep"],
-            horizontal=False,
-            key="queue_mode",
-        )
-        deep_queue = queue_mode == "Deep"
-
         # Parse the textarea into a normalized ticker list whenever the user
         # types — this lets us update the count in the button label.
         # Accept both newlines and commas as separators.
@@ -348,7 +331,6 @@ with tab_queue:
         try:
             zip_path, results = process_queue(
                 st.session_state["queue"],
-                deep=deep_queue,
                 on_progress=on_progress,
             )
 

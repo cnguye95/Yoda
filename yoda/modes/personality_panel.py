@@ -1,26 +1,24 @@
 """Multi-agent personality panel mode for Yoda (Phase 10).
 
-run_personality_panel() is the new top-level mode replacing the old RAG-LLM
-and Agent-Reasoning paths in the Streamlit UI. The design:
+run_personality_panel() is the top-level mode for the Streamlit UI. The design:
 
-  Phase 1 — Ingest:        fetch + chunk + embed + upsert the primary filing.
+  Phase 1 — Ingest:         fetch + chunk + embed + upsert the primary filing.
   Phase 2 — Investigations: 6 personalities (Optimist, Pessimist, Conservative,
                             Dreamer, Contrarian, Quant) each run a tool-use
                             loop in parallel using gpt-4o-mini. Each emits
                             1-2 hypotheses with self-rated confidence.
   Phase 3 — Cross-critique: each personality reads peers' hypotheses and emits
                             typed messages (SUPPORTS, CHALLENGES, EXTENDS).
-                            Skipped in Fast mode.
   Phase 4 — Synthesis:      gpt-4o produces the final EarningsReport using the
                             filtered hypothesis set + critique messages + the
-                            full pool of news/consensus data.
+                            full pool of news data.
 
 Six loop hedges keep Phase 2 honest: iteration cap, wall-clock cap,
 repetition detector, empty-result short-circuit, graceful degradation, and a
 termination-rewarding system prompt. They're documented in the plan and
 called out in-line where they fire.
 
-Verification gate: python -m yoda.modes.personality_panel [TICKER] [--fast|--deep]
+Verification gate: python -m yoda.modes.personality_panel [TICKER]
 """
 
 import json
@@ -76,12 +74,8 @@ GPT4O_MINI_INPUT_COST_PER_1K  = 0.00015
 GPT4O_MINI_OUTPUT_COST_PER_1K = 0.0006
 EMBEDDING_COST_PER_1K         = 0.00002
 
-# Mode-specific caps. Deep mode permits more tool calls and a longer per-
-# personality wall-clock budget; Fast mode tightens both and skips Phase 3.
-_CAPS = {
-    "deep": {"max_iterations": 6, "wall_timeout_seconds": 45, "do_critique": True},
-    "fast": {"max_iterations": 3, "wall_timeout_seconds": 25, "do_critique": False},
-}
+# Per-personality iteration and wall-clock caps for the panel.
+_CAPS = {"max_iterations": 6, "wall_timeout_seconds": 45, "do_critique": True}
 
 # Hard report-level budget — used as a sanity assertion at the end of a run.
 REPORT_BUDGET_USD = 0.65
@@ -815,16 +809,14 @@ def _synthesize_report(
 
 def run_personality_panel(
     ticker: str,
-    deep: bool = True,
 ) -> tuple[EarningsReport, list[PersonalityResult], list[CritiqueMessage]]:
     """Run the multi-agent personality panel against *ticker*.
 
     Returns (report, personality_results, critique_messages).
     """
     ticker = ticker.upper().strip()
-    mode = "deep" if deep else "fast"
-    caps = _CAPS[mode]
-    log_prefix = f"[panel:{mode}]"
+    caps = _CAPS
+    log_prefix = "[panel]"
 
     wall_start = time.perf_counter()
     embed_tokens = 0
@@ -839,14 +831,8 @@ def run_personality_panel(
 
     # Handle the case where no 10-K or 10-Q was filed within the freshness window.
     if filing is None:
-        if not deep:
-            raise RuntimeError(
-                f"No 10-K or 10-Q filed in the last 92 days for {ticker}. "
-                "Fast mode requires a recent SEC filing. "
-                "Switch to Deep mode to generate a news-based report."
-            )
         print(f"{log_prefix} [WARNING] No recent SEC filing found for {ticker}. "
-              "Deep mode will investigate using news and peer filings only.")
+              "Panel will investigate using news and peer filings only.")
         filing = {
             "ticker":           ticker,
             "filing_type":      "N/A",
@@ -1010,8 +996,6 @@ def run_personality_panel(
                 except Exception as exc:
                     print(f"{log_prefix} [{personality}] critique failed: {exc}")
         print(f"{log_prefix} Phase 3 done: {len(critique_messages)} messages")
-    else:
-        print(f"{log_prefix} Phase 3 skipped (Fast mode)")
 
     # ------------------------------------------------------------------
     # Hypothesis filter (deterministic)
@@ -1109,22 +1093,15 @@ def run_personality_panel(
 if __name__ == "__main__":
     import sys
 
-    # Parse CLI args: positional is ticker, flag is --fast or --deep.
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    flags = [a for a in sys.argv[1:] if a.startswith("--")]
-    ticker = (args[0] if args else "NFLX").upper()
-    deep = "--fast" not in flags  # default to deep unless --fast is explicit
+    ticker = (sys.argv[1] if len(sys.argv) > 1 else "NFLX").upper()
+    print(f"Running personality panel for {ticker}...\n")
 
-    mode_label = "DEEP" if deep else "FAST"
-    print(f"Running personality panel ({mode_label}) for {ticker}...\n")
-
-    report, results, messages = run_personality_panel(ticker, deep=deep)
+    report, results, messages = run_personality_panel(ticker)
 
     # Save report to data/eval for downstream comparison.
     out_dir = pathlib.Path("data/eval")
     out_dir.mkdir(parents=True, exist_ok=True)
-    suffix = "deep" if deep else "fast"
-    out_file = out_dir / f"panel_{suffix}_{ticker}.json"
+    out_file = out_dir / f"panel_{ticker}.json"
     out_file.write_text(report.model_dump_json(indent=2), encoding="utf-8")
     print(f"\nSaved report to {out_file}")
 
