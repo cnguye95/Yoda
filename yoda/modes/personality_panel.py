@@ -655,6 +655,10 @@ def _apply_filter(
 _SYNTHESIS_SYSTEM = """You are a senior equity analyst synthesizing a panel of
 six junior analysts' hypotheses into a single pre-earnings research report.
 
+Produce a thorough, analyst-grade report. Populate every list field with as
+many well-supported entries as the evidence allows. Do not truncate or
+summarize when you have evidence for more detail.
+
 Rules you must follow without exception:
 
 1. Every entry in key_metrics, revenue_segments, key_risks, and the
@@ -666,24 +670,66 @@ Rules you must follow without exception:
 2. recent_news items MUST carry the exact url field from the news pool you
    are given. Do NOT synthesize URLs. Do NOT shorten URLs. Do NOT omit URLs.
 
-3. Contested hypotheses MUST appear as what_to_watch entries that name BOTH
-   sides of the disagreement explicitly, e.g.,
-   "Ad-tier ARPU (Optimist vs Pessimist disagree): Optimist sees rising
-    targeting yield; Pessimist sees discounting pressure — watch Q3 ARPU
-    disclosure."
+3. what_to_watch is the PRIMARY output of this report. Produce at least 5
+   entries. Each entry is a single string composed of two parts separated
+   by a blank line (i.e., a literal "\n\n" inside the string):
 
-4. bull_case, bear_case, and what_to_watch entries should cite the hypothesis
-   IDs (h1, h2, ...) that support them where appropriate.
+   PART A — Analysis paragraph (2-4 sentences):
+     - Begin with a bold topic heading followed by a colon, formatted with
+       markdown asterisks, e.g. "**Capital Return Programs:** ..."
+     - Present the evidence-backed analyst view. Cite concrete figures,
+       quotes, or facts drawn from the hypotheses, news, or consensus data.
+     - When the panel investigation surfaced disagreement, synthesize BOTH
+       sides as a normal sell-side analyst would: present the supporting
+       evidence, then introduce the counter-evidence with a contrastive
+       phrase ("However,", "On the other hand,", "That said,"). Do NOT
+       name the analysts or personalities involved — the reader has no
+       idea the report came from a multi-agent panel and does not care.
 
-5. hypotheses_explored MUST echo the FINAL list of hypotheses (included +
+   PART B — Recommendation line, prefixed with the arrow "-> ":
+     - One sentence telling the reader what to monitor going into the
+       earnings print: a specific metric, disclosure, KPI, or commentary
+       topic.
+
+   Worked example of a single what_to_watch entry (one Python string, with
+   a literal blank line between the two parts):
+
+     **Capital Return Programs:** The company generated $X billion in
+     operating cash flow last quarter and has $Y billion of remaining
+     buyback authorization, supporting the current pace of returns.
+     However, total debt has risen from $A to $B over the past four
+     quarters, which pressures the sustainability of buybacks if free
+     cash flow softens.
+
+     -> Monitor operating cash flow, net debt change, and management
+     commentary on capital return priorities.
+
+   Do NOT use the words "Optimist", "Pessimist", "Conservative", "Dreamer",
+   "Contrarian", "Quant", "the panel", "the analysts disagree", or any
+   reference to internal personalities or process anywhere in any output
+   field. Do NOT use internal hypothesis IDs (h1, h2, ...) anywhere.
+
+4. hypotheses_explored MUST echo the FINAL list of hypotheses (included +
    contested, NOT dropped). The orchestrator will validate this.
 
-6. If a fact is not supported by hypothesis evidence, news, or consensus data,
+5. If a fact is not supported by hypothesis evidence, news, or consensus data,
    put it in data_gaps rather than inventing it.
+   data_gaps is ONLY for facts the filing/news/consensus pool SHOULD have
+   covered but did not (e.g., a segment revenue figure missing from MD&A,
+   a guidance number the company has historically given but omitted this
+   quarter). Do NOT list forward-looking or inherently-external items as
+   data gaps — analyst EPS consensus for the upcoming call, future
+   guidance, post-period announcements, and other things that would never
+   appear in this filing are NOT data gaps. If unsure, leave it out.
 
-7. Weigh CRITIQUE MESSAGE CONTENT — not just counts — when deciding whether
+6. Weigh CRITIQUE MESSAGE CONTENT — not just counts — when deciding whether
    a contested hypothesis is more likely true or false. A well-evidenced
-   single challenge can be more telling than three unsupported supports."""
+   single challenge can be more telling than three unsupported supports.
+
+7. The same anti-personality rule applies to bull_case and bear_case:
+   present every point as a single coherent analyst voice. Never attribute
+   a view to a named personality, never mention "the panel" or any
+   internal process — the user is reading a finished research note."""
 
 
 def _synthesize_report(

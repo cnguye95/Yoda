@@ -1,21 +1,11 @@
 """Streamlit entry point for Yoda. Run with: `streamlit run app.py`.
 
-Phase 10 UI: single-mode personality panel (Fast/Deep toggle) plus a ticker
-queue for batch overnight runs. Streaming progress, summary card, and PDF
-download are unchanged from prior phases. The queue panel adds: live status
-table, ZIP download of all PDFs when batch completes, and a completion
-notification banner with auto-scroll.
-
-Both run paths use print() internally for progress logging; we redirect
-stdout to a Streamlit placeholder so the log streams live in the browser
-without any mode-side refactoring.
+Two tabs: Single ticker (generate one report with Fast/Deep toggle) and Queue
+(batch multiple tickers overnight, download all PDFs as a ZIP).
 """
 
-import contextlib
-import io
 import pathlib
 import tempfile
-import threading
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -34,40 +24,13 @@ st.set_page_config(page_title="Yoda", layout="centered")
 
 
 # ---------------------------------------------------------------------------
-# Streaming stdout capture
-# ---------------------------------------------------------------------------
-
-class _StreamlitLogStream:
-    # File-like object that mirrors writes into both an in-memory buffer and
-    # a Streamlit placeholder. Each write() refreshes the placeholder so the
-    # browser shows print() output line-by-line in real time.
-    def __init__(self, placeholder):
-        self.buf = io.StringIO()
-        self.placeholder = placeholder
-        self._lock = threading.Lock()
-
-    def write(self, text):
-        # Lock so concurrent personality threads can't interleave the two steps.
-        with self._lock:
-            self.buf.write(text)
-            try:
-                self.placeholder.code(self.buf.getvalue())
-            except Exception:
-                # Streamlit raises NoSessionContext when called from a background
-                # thread. Suppress it — the buffer still accumulates and is
-                # rendered from the main thread after the run completes.
-                pass
-        return len(text)
-
-    def flush(self):
-        # Required by the file-like protocol; nothing to do since write()
-        # already pushes updates to the placeholder.
-        pass
-
-
-# ---------------------------------------------------------------------------
 # PDF generation helper (cached per-ticker via session state)
 # ---------------------------------------------------------------------------
+
+def _md(text: str) -> str:
+    # Escape bare dollar signs so Streamlit doesn't interpret them as LaTeX math.
+    return text.replace("$", r"\$")
+
 
 def _ensure_pdf(report) -> bytes:
     # Return cached PDF bytes if we already generated one for this ticker.
@@ -109,12 +72,8 @@ st.session_state.setdefault("queue_status", "idle")
 # Header
 # ---------------------------------------------------------------------------
 
-st.title("Yoda — pre-earnings research assistant")
-st.caption(
-    "Multi-agent personality panel: six analysts (Optimist, Pessimist, "
-    "Conservative, Dreamer, Contrarian, Quant) investigate the most recent "
-    "filing in parallel, then cross-critique before synthesis."
-)
+st.title("Yoda — Pre-Earnings Research Assistant")
+st.caption("A multi-agentic tool built for everyone")
 
 
 # ---------------------------------------------------------------------------
@@ -145,8 +104,7 @@ if st.session_state["queue_status"] == "complete":
             type="primary",
         )
 
-    # Auto-scroll the page to the top so the notification is visible. We do
-    # this once per "complete" transition by tying it to the queue_status.
+    # Auto-scroll to top so the notification is immediately visible.
     components.html(
         "<script>window.parent.document.querySelector('section.main').scrollTo(0, 0);</script>",
         height=0,
@@ -190,39 +148,19 @@ with tab_single:
 
     # Generation handler — runs when the button is clicked.
     if generate_clicked:
-        with st.status(
-            f"Generating {mode_label} report for {ticker}...",
-            expanded=True,
-        ) as status:
-            log_box = st.empty()
-            stream = _StreamlitLogStream(log_box)
-            try:
-                # Redirect stdout so every print() in the mode functions gets
-                # routed through our placeholder for live display.
-                with contextlib.redirect_stdout(stream):
-                    report, personality_results, critique_messages = run_personality_panel(
-                        ticker, deep=deep,
-                    )
+        try:
+            with st.spinner(f"Generating {mode_label} report for {ticker}..."):
+                report, _, _ = run_personality_panel(ticker, deep=deep)
 
-                status.update(label=f"{ticker} report ready", state="complete")
-                # Render accumulated log from the main thread — background
-                # threads couldn't call placeholder.code() directly.
-                log_box.code(stream.buf.getvalue())
+            # Persist report in session state so it survives reruns.
+            st.session_state["report"] = report
+            st.session_state["ticker"] = ticker
+            # Invalidate any previously cached PDF.
+            st.session_state.pop("pdf_bytes",  None)
+            st.session_state.pop("pdf_ticker", None)
 
-                # Persist results in session state so they survive reruns.
-                st.session_state["report"] = report
-                st.session_state["personality_results"] = personality_results
-                st.session_state["critique_messages"]   = critique_messages
-                st.session_state["ticker"] = ticker
-                # Invalidate any previously cached PDF.
-                st.session_state.pop("pdf_bytes",  None)
-                st.session_state.pop("pdf_ticker", None)
-
-            except Exception as exc:
-                status.update(label="Generation failed", state="error")
-                # Show whatever was logged before the failure.
-                log_box.code(stream.buf.getvalue())
-                st.error(f"Could not generate report for {ticker}: {exc}")
+        except Exception as exc:
+            st.error(f"Could not generate report for {ticker}: {exc}")
 
     # Results section — shown only after a successful generation.
     if "report" in st.session_state:
@@ -231,13 +169,6 @@ with tab_single:
         st.divider()
         st.subheader(f"{report.ticker} — {report.company_name}")
         st.caption(f"{report.filing_type} filed {report.filing_date}")
-
-        # Four-column metric strip summarising the report.
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Key Metrics", len(report.key_metrics))
-        col2.metric("Segments",    len(report.revenue_segments))
-        col3.metric("Hypotheses",  len(report.hypotheses_explored))
-        col4.metric("Data Gaps",   len(report.data_gaps))
 
         # PDF download button — generated once and cached.
         pdf_bytes = _ensure_pdf(report)
@@ -248,61 +179,38 @@ with tab_single:
             mime="application/pdf",
         )
 
-        # Bull / Bear / Watch summary in an expander.
-        with st.expander("Bull / Bear / What to Watch"):
+        # Pre-Earnings Watchlist — primary section, always visible.
+        # Each entry is two paragraphs (analysis + "-> Monitor ..." recommendation).
+        # st.markdown handles "\n\n" as a paragraph break and **bold** natively;
+        # we add an empty markdown call to space entries from each other.
+        st.subheader("Pre-Earnings Watchlist")
+        for point in report.what_to_watch:
+            st.markdown(_md(point))
+            st.markdown("")
+
+        # Bull / Bear — secondary, in an expander.
+        with st.expander("Bull Case / Bear Case"):
             st.markdown("**Bull case**")
             for point in report.bull_case:
-                st.markdown(f"- {point}")
+                st.markdown(f"- {_md(point)}")
             st.markdown("**Bear case**")
             for point in report.bear_case:
-                st.markdown(f"- {point}")
-            st.markdown("**What to watch**")
-            for point in report.what_to_watch:
-                st.markdown(f"- {point}")
+                st.markdown(f"- {_md(point)}")
 
-        # Data gaps expander — visible only when there are gaps to show.
-        if report.data_gaps:
-            with st.expander(f"Data gaps ({len(report.data_gaps)})"):
-                for gap in report.data_gaps:
-                    st.markdown(f"- {gap}")
-
-        # Panel trace expander — replaces the old reasoning-trace expander.
-        # Renders each personality's hypotheses + the critique message graph.
-        if st.session_state.get("personality_results"):
-            results = st.session_state["personality_results"]
-            messages = st.session_state.get("critique_messages") or []
-
-            with st.expander(
-                f"Panel trace ({len(results)} personalities, {len(messages)} critique messages)"
-            ):
-                for pr in results:
-                    clean_marker = "✓" if pr.finished_cleanly else "✗"
-                    st.markdown(
-                        f"**{clean_marker} {pr.personality}** — "
-                        f"{pr.tool_calls_used} tools, {pr.wall_seconds:.1f}s, "
-                        f"${pr.cost_usd:.4f}"
-                    )
-                    for h in pr.hypotheses:
-                        st.markdown(
-                            f"- `{h.id}` (confidence {h.confidence}/5) — "
-                            f"*{h.question}*"
-                        )
-                        st.markdown(f"  > {h.summary}")
+        # Recent news with clickable URLs.
+        if report.recent_news:
+            with st.expander(f"Recent News ({len(report.recent_news)})"):
+                for item in report.recent_news:
+                    st.markdown(f"**{_md(item.headline)}** — {item.date}")
+                    st.markdown(f"[Read more]({item.url})")
+                    st.markdown(f"*{_md(item.relevance_note)}*")
                     st.markdown("---")
 
-                if messages:
-                    st.markdown("**Critique messages**")
-                    for m in messages:
-                        color = {
-                            "SUPPORTS":   "🟢",
-                            "CHALLENGES": "🔴",
-                            "EXTENDS":    "🔵",
-                        }.get(m.message_type, "⚪")
-                        st.markdown(
-                            f"{color} **{m.from_personality} → "
-                            f"`{m.target_hypothesis_id}`** "
-                            f"[{m.message_type}]: {m.content}"
-                        )
+        # Data gaps — visible only when there are gaps to show.
+        if report.data_gaps:
+            with st.expander(f"Data Gaps ({len(report.data_gaps)})"):
+                for gap in report.data_gaps:
+                    st.markdown(f"- {_md(gap)}")
 
 
 # ---------------------------------------------------------------------------
@@ -384,20 +292,14 @@ with tab_queue:
     if run_clicked:
         st.session_state["queue_status"] = "running"
 
-        # Per-ticker live status table. We render it as an empty placeholder
-        # and update it from the on_progress callback below.
+        # Per-ticker live status table updated via the on_progress callback.
         status_placeholder = st.empty()
-
-        # Pre-populate the table with "pending" rows so the user sees the
-        # full list immediately, not just the one currently running.
         live_status: dict[str, str] = {t: "pending" for t in st.session_state["queue"]}
 
         def _render_status_table():
-            # Build a simple markdown table from live_status. Streamlit
-            # re-renders the placeholder each call so updates are immediate.
+            # Build a markdown table from live_status; re-render on each update.
             rows = ["| Ticker | Status |", "|---|---|"]
             for t, s in live_status.items():
-                # Color the status with an emoji so progress is scannable.
                 emoji = (
                     "⏳" if s == "running"
                     else "✅" if s == "complete"
@@ -410,25 +312,18 @@ with tab_queue:
         _render_status_table()
 
         def on_progress(ticker: str, status: str) -> None:
-            # Streamlit callback. Updates the live table after each ticker
-            # transition so the user sees progress in real time.
+            # Called from the main thread between ticker runs.
             live_status[ticker] = status
             _render_status_table()
 
-        # Show streaming log too so the user can watch the panel internals.
-        log_box = st.empty()
-        stream = _StreamlitLogStream(log_box)
-
         try:
-            with contextlib.redirect_stdout(stream):
-                zip_path, results = process_queue(
-                    st.session_state["queue"],
-                    deep=deep_queue,
-                    on_progress=on_progress,
-                )
+            zip_path, results = process_queue(
+                st.session_state["queue"],
+                deep=deep_queue,
+                on_progress=on_progress,
+            )
 
-            # Read the ZIP into memory so the download_button can serve it
-            # even if the file is later cleaned up.
+            # Read the ZIP into memory so the download_button can serve it.
             zip_bytes = pathlib.Path(zip_path).read_bytes()
 
             st.session_state["queue_results"]   = results
@@ -439,20 +334,15 @@ with tab_queue:
 
         except Exception as exc:
             st.session_state["queue_status"] = "idle"
-            log_box.code(stream.buf.getvalue())
             st.error(f"Queue run failed: {exc}")
 
-    # If a queue has completed in this session, show the per-ticker results
-    # table with individual download links. This is in addition to the ZIP
-    # button at the top.
+    # If a queue has completed, show per-ticker download buttons.
     if st.session_state.get("queue_results"):
         st.divider()
         st.subheader("Results")
         for r in st.session_state["queue_results"]:
             if r["status"] == "complete":
                 pdf = pathlib.Path(r["pdf_path"])
-                # Show each PDF as a download button so users can grab one
-                # at a time without unpacking the ZIP.
                 st.download_button(
                     label=f"✅ {r['ticker']} — {pdf.name} ({r['seconds']:.0f}s)",
                     data=pdf.read_bytes(),

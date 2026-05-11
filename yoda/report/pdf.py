@@ -310,8 +310,35 @@ def _news_section(report: EarningsReport, styles):
     return elements
 
 
-def _bull_bear_watch_section(report: EarningsReport, styles):
-    """Build the Bull Case / Bear Case / What to Watch sections."""
+def _what_to_watch_section(report: EarningsReport, styles):
+    """Build the Pre-Earnings Watchlist section — primary output, first after cover."""
+    elements = []
+    elements.append(Paragraph("Pre-Earnings Watchlist", styles['SectionHeader']))
+    elements.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#003366')))
+    elements.append(Spacer(1, 0.1*inch))
+
+    # Each entry has two parts (analysis + recommendation) separated by a blank
+    # line. Split on "\n\n", render each part as its own Paragraph, and convert
+    # markdown **bold** to ReportLab <b> tags so the topic heading shows in bold.
+    for point in report.what_to_watch:
+        parts = [p.strip() for p in point.split("\n\n") if p.strip()]
+        for idx, part in enumerate(parts):
+            # Convert one pair of ** markers into <b>...</b> for ReportLab.
+            rendered = part.replace("**", "<b>", 1).replace("**", "</b>", 1)
+            elements.append(Paragraph(rendered, styles['BodyText']))
+            if idx < len(parts) - 1:
+                elements.append(Spacer(1, 0.06*inch))   # gap inside an entry
+        elements.append(Spacer(1, 0.18*inch))           # gap between entries
+
+    if not report.what_to_watch:
+        elements.append(Paragraph('(None)', styles['Normal']))
+
+    elements.append(Spacer(1, 0.3*inch))
+    return elements
+
+
+def _bull_bear_section(report: EarningsReport, styles):
+    """Build the Bull Case / Bear Case sections."""
     elements = []
 
     # Bull Case
@@ -327,14 +354,6 @@ def _bull_bear_watch_section(report: EarningsReport, styles):
     for point in report.bear_case:
         elements.append(Paragraph(point, styles['Normal']))
     if not report.bear_case:
-        elements.append(Paragraph('(None)', styles['Normal']))
-    elements.append(Spacer(1, 0.2*inch))
-
-    # What to Watch
-    elements.append(Paragraph("What to Watch", styles['SectionHeader']))
-    for point in report.what_to_watch:
-        elements.append(Paragraph(point, styles['Normal']))
-    if not report.what_to_watch:
         elements.append(Paragraph('(None)', styles['Normal']))
 
     elements.append(Spacer(1, 0.2*inch))
@@ -355,51 +374,6 @@ def _data_gaps_section(report: EarningsReport, styles):
     return elements
 
 
-def _hypotheses_section(report: EarningsReport, styles):
-    """Build the Hypotheses Explored section (Phase 10 multi-agent transparency).
-
-    Shows the final panel-investigated hypotheses so the analyst can see what
-    questions were asked and which personality proposed each one. Skips
-    rendering entirely if the field is empty (older modes won't populate it).
-    """
-    elements = []
-
-    # The field defaults to [] on EarningsReport so older reports (baseline,
-    # rag_llm, agent) won't crash here — they just skip the section.
-    if not getattr(report, "hypotheses_explored", None):
-        return elements
-
-    elements.append(Paragraph("Hypotheses Explored", styles['SectionHeader']))
-
-    # Small-font table: ID | Personality | Question. The summary column is
-    # too wide for a single-page table so we expose it inline as a Paragraph
-    # under the row instead.
-    rows = [['ID', 'Personality', 'Question', 'Confidence']]
-    for h in report.hypotheses_explored:
-        rows.append([
-            h.id,
-            h.proposing_personality,
-            Paragraph(h.question, styles['Citation']),
-            f"{h.confidence}/5",
-        ])
-
-    table = Table(rows, colWidths=[0.5*inch, 1.0*inch, 4.5*inch, 0.8*inch])
-    table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#003366')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 9),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f5f5f5')]),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-        ('FONTSIZE', (0, 1), (-1, -1), 8),
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-    ]))
-
-    elements.append(table)
-    elements.append(Spacer(1, 0.2*inch))
-    return elements
 
 
 # ============================================================================
@@ -438,6 +412,9 @@ def report_to_pdf(report: EarningsReport, output_path: str, filing_url: str | No
     story.extend(_cover_elements(report, styles))
     story.append(Spacer(1, 0.4*inch))
 
+    # Pre-Earnings Watchlist — primary section, first after cover
+    story.extend(_what_to_watch_section(report, styles))
+
     # Metrics table
     story.extend(_metrics_table(report, styles, filing_url))
 
@@ -456,11 +433,8 @@ def report_to_pdf(report: EarningsReport, output_path: str, filing_url: str | No
     # Recent news
     story.extend(_news_section(report, styles))
 
-    # Bull / bear / watch
-    story.extend(_bull_bear_watch_section(report, styles))
-
-    # Hypotheses explored (Phase 10 — only present in panel-mode reports)
-    story.extend(_hypotheses_section(report, styles))
+    # Bull / Bear
+    story.extend(_bull_bear_section(report, styles))
 
     # Data gaps (only if present)
     story.extend(_data_gaps_section(report, styles))
