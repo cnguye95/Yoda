@@ -136,7 +136,16 @@ def judge_report(report: EarningsReport, filing_text: str) -> JudgeScores:
 
     # Extract the tool call input dict from the first content block.
     scores_dict = response.content[0].input
-    scores = JudgeScores.model_validate(scores_dict)
+
+    # The model occasionally returns DimensionScore fields as JSON strings
+    # rather than nested dicts. Only attempt parse on strings that look like
+    # JSON objects (start with '{') to leave plain strings like overall_comment
+    # untouched.
+    coerced = {
+        k: (json.loads(v) if isinstance(v, str) and v.startswith("{") else v)
+        for k, v in scores_dict.items()
+    }
+    scores = JudgeScores.model_validate(coerced)
 
     # Persist to cache before returning.
     _CACHE_DIR.mkdir(parents=True, exist_ok=True)
