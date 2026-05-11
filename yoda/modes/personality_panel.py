@@ -656,23 +656,36 @@ Rules you must follow without exception:
 
 1. Every entry in key_metrics, revenue_segments, key_risks, and the
    forward_guidance block MUST have a non-empty source_citation field.
-   Copy the source_citation label VERBATIM from the hypothesis evidence
-   that supports the fact (e.g., if the hypothesis says
-   "MD&A — Results of Operations", use exactly that string — do NOT
-   rephrase, abbreviate, or reconstruct it). For news-derived facts,
-   cite the article URL exactly as given.
+   Use the section label of the FILING CHUNK or hypothesis evidence
+   that supports the fact, copied VERBATIM (e.g., if the chunk is
+   tagged "[Financial Statements — Consolidated Statements of
+   Operations]", use exactly "Financial Statements — Consolidated
+   Statements of Operations"). Do NOT rephrase, abbreviate, or
+   reconstruct citation labels. For news-derived facts, cite the
+   article URL exactly as given.
 
-   key_metrics and revenue_segments figures MUST be derived from
-   filing evidence in the hypotheses. Do NOT use figures from news
-   articles, external URLs, or analyst estimates for these fields —
-   even if a hypothesis mentions an external figure in passing. If a
-   metric is only known from external sources, omit it from key_metrics
-   and record it in data_gaps instead.
+   key_metrics and revenue_segments figures MUST come from the
+   FILING CHUNKS provided in the user message, NOT from hypotheses
+   that mention external figures. The FILING CHUNKS block is the
+   authoritative source for every quantitative fact about the
+   company's reporting period. If a hypothesis quotes a different
+   number for a metric the chunks also report, trust the chunks.
+   If a metric is only known from external sources, omit it from
+   key_metrics and record it in data_gaps instead.
+
+   EXTRACTION TARGET: From the FILING CHUNKS, populate key_metrics
+   with AT LEAST the following when each is reported: total revenue,
+   net income (or net loss), EPS (basic and diluted), operating
+   income/loss, gross margin or gross profit, operating cash flow,
+   free cash flow, total cash and equivalents, total debt, and any
+   segment revenue figures (geographic or product). Add more as the
+   chunks support them. A sparse key_metrics list when the chunks
+   contain these line items is a failure.
 
    When populating revenue_segments or key_metrics with YoY figures,
    label periods explicitly (e.g. "Q1 FY2026 vs Q1 FY2025"). The
    CURRENT reporting period value goes in the `value` field. When a
-   table in the evidence shows two figures side-by-side, the first
+   table in the chunks shows two figures side-by-side, the first
    column is typically current period and the second is prior period —
    verify this from context before copying. If you cannot determine
    which period is current, omit the metric and note it in data_gaps.
@@ -759,6 +772,40 @@ Rules you must follow without exception:
    internal process — the user is reading a finished research note."""
 
 
+# Queries used to pull the financial sections directly to the synthesizer so
+# it can populate key_metrics/revenue_segments from primary source material
+# instead of relying on whatever the personalities happened to surface.
+_FINANCIAL_QUERIES = [
+    "consolidated statements of operations revenue net income EPS earnings per share",
+    "consolidated balance sheet total assets liabilities cash and equivalents debt",
+    "consolidated statements of cash flows operating investing financing",
+    "segment revenue geographic breakdown product mix",
+    "operating income margin gross profit cost of revenue",
+]
+
+
+def _retrieve_financial_chunks(ctx) -> list[Chunk]:
+    # Query ChromaDB for the five financial categories above and return a
+    # deduped chunk list. Each query gets up to 3 chunks; we dedupe by
+    # (section, first 80 chars of text) to avoid the same chunk appearing
+    # under multiple queries.
+    seen: set[tuple[str, str]] = set()
+    out: list[Chunk] = []
+    for q in _FINANCIAL_QUERIES:
+        for c in ctx.store.query(ctx.primary_accession, q, k=3):
+            key = (c.section, c.text[:80])
+            if key not in seen:
+                seen.add(key)
+                out.append(c)
+        if ctx.supplemental_accession:
+            for c in ctx.store.query(ctx.supplemental_accession, q, k=2):
+                key = (c.section, c.text[:80])
+                if key not in seen:
+                    seen.add(key)
+                    out.append(c)
+    return out
+
+
 def _synthesize_report(
     ticker: str,
     primary_filing: dict,
@@ -766,6 +813,7 @@ def _synthesize_report(
     contested: list[Hypothesis],
     critique_messages: list[CritiqueMessage],
     news_pool: list[dict],
+    financial_chunks: list[Chunk],
 ) -> tuple[EarningsReport, int, int]:
     """One gpt-4o call producing the final EarningsReport.
 
@@ -794,11 +842,17 @@ def _synthesize_report(
 
     now_utc = datetime.now(timezone.utc).isoformat()
 
+    # Render the financial chunks with their section labels so the synthesizer
+    # can copy the labels verbatim into source_citation fields.
+    chunks_block = _render_chunks(financial_chunks)
+
     user_prompt = (
         f"Ticker: {ticker}\n"
         f"Company: {primary_filing.get('ticker', ticker)}\n"
         f"Filing: {primary_filing['filing_type']} filed {primary_filing['filing_date']}\n"
         f"Report timestamp (use for report_generated_at): {now_utc}\n\n"
+        f"--- FILING CHUNKS (authoritative for key_metrics, revenue_segments, "
+        f"forward_guidance, key_risks) ---\n{chunks_block}\n\n"
         f"--- HYPOTHESES (final, from panel investigation) ---\n{hyp_text}\n\n"
         f"--- {contested_block} ---\n\n"
         f"--- CRITIQUE MESSAGES (peer review) ---\n{msg_text}\n\n"
@@ -1026,6 +1080,12 @@ def run_personality_panel(
     # Phase 4 — Synthesis
     # ------------------------------------------------------------------
     print(f"{log_prefix} Phase 4: synthesizing report via {GPT4O_MODEL}...")
+    # Pull the financial sections directly so the synthesizer can mine them
+    # for key_metrics and revenue_segments instead of relying on whatever
+    # the personalities happened to surface.
+    financial_chunks = _retrieve_financial_chunks(ctx)
+    print(f"{log_prefix} Retrieved {len(financial_chunks)} financial chunks for synthesis")
+
     t0 = time.perf_counter()
     report, syn_in, syn_out = _synthesize_report(
         ticker=ticker,
@@ -1034,6 +1094,7 @@ def run_personality_panel(
         contested=contested,
         critique_messages=critique_messages,
         news_pool=ctx.news_pool,
+        financial_chunks=financial_chunks,
     )
     gpt4o_in  += syn_in
     gpt4o_out += syn_out
